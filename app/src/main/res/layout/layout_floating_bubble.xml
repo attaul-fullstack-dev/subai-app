@@ -39,12 +39,12 @@
             android:id="@+id/btnMenuArea"
             android:layout_width="wrap_content"
             android:layout_height="36dp"
-            android:text="📐 Area"
+            android:text="📐 Ubah Area"
             android:textColor="#FFFFFF"
             android:textSize="11sp"
             android:backgroundTint="#333333"
             android:layout_marginEnd="4dp"
-            android:paddingHorizontal="8dp" />
+            android:paddingHorizontal="10dp" />
 
         <Button
             android:id="@+id/btnMenuToggleAuto"

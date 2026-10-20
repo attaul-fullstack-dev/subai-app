@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/rootCropSelection"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#59000000">
+
+    <!-- Top Guide Banner -->
+    <LinearLayout
+        android:id="@+id/topGuideBanner"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|center_horizontal"
+        android:layout_marginTop="24dp"
+        android:background="@drawable/bg_floating_subtitle"
+        android:paddingHorizontal="16dp"
+        android:paddingVertical="8dp"
+        android:elevation="10dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="📐 Geser kotak ke subtitle game • Tarik sudut untuk atur ukuran"
+            android:textColor="#00E5FF"
+            android:textSize="12sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+    <!-- The Interactive Drag & Scale Selection Box -->
+    <com.subai.translator.DragScaleView
+        android:id="@+id/dragScaleView"
+        android:layout_width="320dp"
+        android:layout_height="90dp" />
+
+    <!-- Dynamic Toolbar that follows the selection box -->
+    <LinearLayout
+        android:id="@+id/layoutToolbar"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:background="@drawable/bg_floating_subtitle"
+        android:padding="6dp"
+        android:elevation="12dp">
+
+        <Button
+            android:id="@+id/btnLockArea"
+            android:layout_width="wrap_content"
+            android:layout_height="40dp"
+            android:text="✓ KUNCI AREA"
+            android:textColor="#000000"
+            android:textSize="12sp"
+            android:textStyle="bold"
+            android:backgroundTint="#00E5FF"
+            android:paddingHorizontal="14dp" />
+
+        <Button
+            android:id="@+id/btnPresetBottom"
+            android:layout_width="wrap_content"
+            android:layout_height="40dp"
+            android:layout_marginStart="6dp"
+            android:text="⟲ Bawah Game"
+            android:textColor="#FFFFFF"
+            android:textSize="11sp"
+            android:backgroundTint="#333333"
+            android:paddingHorizontal="10dp" />
+
+        <Button
+            android:id="@+id/btnCancelArea"
+            android:layout_width="wrap_content"
+            android:layout_height="40dp"
+            android:layout_marginStart="6dp"
+            android:text="✕ Batal"
+            android:textColor="#CCCCCC"
+            android:textSize="11sp"
+            android:backgroundTint="#262626"
+            android:paddingHorizontal="10dp" />
+    </LinearLayout>
+
+</FrameLayout>

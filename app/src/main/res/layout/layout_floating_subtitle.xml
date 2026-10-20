@@ -1,61 +1,40 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/cardSubtitleBox"
-    android:layout_width="match_parent"
+    android:layout_width="wrap_content"
     android:layout_height="wrap_content"
-    android:layout_marginHorizontal="16dp"
-    android:layout_marginBottom="8dp"
     android:orientation="vertical"
+    android:gravity="center"
     android:background="@drawable/bg_floating_subtitle"
-    android:elevation="14dp"
-    android:padding="10dp">
+    android:paddingHorizontal="16dp"
+    android:paddingVertical="8dp"
+    android:elevation="14dp">
 
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:gravity="center_vertical">
-
-        <TextView
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="🎮 Subtitle Game (Terjemahan):"
-            android:textColor="#00E5FF"
-            android:textSize="11sp"
-            android:textStyle="bold" />
-
-        <TextView
-            android:id="@+id/btnCloseSubtitle"
-            android:layout_width="28dp"
-            android:layout_height="28dp"
-            android:gravity="center"
-            android:text="✕"
-            android:textColor="#AAAAAA"
-            android:textSize="14sp" />
-    </LinearLayout>
-
-    <!-- Translated Text (Primary, Big, Yellow for easy reading in games) -->
+    <!-- Translated Indonesian Dialogue (Cinematic Game Subtitle Style) -->
     <TextView
         android:id="@+id/tvTranslatedGameText"
-        android:layout_width="match_parent"
+        android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_marginTop="2dp"
         android:textColor="#FFEB3B"
         android:textSize="16sp"
         android:textStyle="bold"
         android:gravity="center"
-        android:text="[Menunggu teks dialog game...]" />
+        android:shadowColor="#000000"
+        android:shadowDx="2"
+        android:shadowDy="2"
+        android:shadowRadius="4"
+        android:text="[ Menunggu dialog game... ]" />
 
-    <!-- Original English Text (Small, muted) -->
+    <!-- Original English Dialogue (Muted) -->
     <TextView
         android:id="@+id/tvOriginalGameText"
-        android:layout_width="match_parent"
+        android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_marginTop="2dp"
-        android:textColor="#888888"
+        android:textColor="#B0BEC5"
         android:textSize="11sp"
         android:gravity="center"
+        android:visibility="gone"
         android:text="" />
 
 </LinearLayout>

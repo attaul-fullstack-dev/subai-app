@@ -11,8 +11,8 @@ android {
         applicationId = "com.subai.translator"
         minSdk = 24
         targetSdk = 34
-        versionCode = 5
-        versionName = "1.3.0-crop-realtime"
+        versionCode = 6
+        versionName = "1.4.0-drag-scale"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
