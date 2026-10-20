@@ -11,8 +11,8 @@ android {
         applicationId = "com.subai.translator"
         minSdk = 24
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 2
+        versionName = "1.1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -45,9 +45,8 @@ dependencies {
     implementation("androidx.constraintlayout:constraintlayout:2.1.4")
     implementation("androidx.activity:activity-ktx:1.9.0")
 
-    // Video Player (Media3 / ExoPlayer)
-    implementation("androidx.media3:media3-exoplayer:1.3.1")
-    implementation("androidx.media3:media3-ui:1.3.1")
+    // ML Kit Text Recognition (OCR On-Device 100% Free)
+    implementation("com.google.mlkit:text-recognition:16.0.0")
 
     // ML Kit On-Device Translation (100% Free & Offline)
     implementation("com.google.mlkit:translate:17.0.3")

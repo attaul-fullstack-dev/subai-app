@@ -1,116 +1,66 @@
 <?xml version="1.0" encoding="utf-8"?>
 <androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
-    xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="@color/bg_dark"
-    android:padding="16dp">
+    android:padding="20dp">
 
-    <!-- Title -->
+    <!-- Header -->
     <TextView
         android:id="@+id/tvAppTitle"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="SubAI Translator"
+        android:text="SubAI Game Translator"
         android:textColor="@color/accent_cyan"
-        android:textSize="22sp"
+        android:textSize="24sp"
         android:textStyle="bold"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toTopOf="parent" />
 
     <TextView
         android:id="@+id/tvSubtitle"
-        android:layout_width="wrap_content"
+        android:layout_width="0dp"
         android:layout_height="wrap_content"
-        android:text="Free &amp; Offline AI Subtitle Generator"
-        android:textColor="#888888"
-        android:textSize="12sp"
+        android:text="Terjemahkan Subtitle Game Cerita (The Walking Dead, RPG, dll.) Langsung di Layar Secara Melayang"
+        android:textColor="#AAAAAA"
+        android:textSize="13sp"
+        android:layout_marginTop="4dp"
         app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintTop_toBottomOf="@id/tvAppTitle" />
 
-    <!-- Video Player Preview Frame -->
+    <!-- Language Selector Card -->
     <com.google.android.material.card.MaterialCardView
-        android:id="@+id/cardVideo"
+        android:id="@+id/cardLanguage"
         android:layout_width="match_parent"
-        android:layout_height="220dp"
-        android:layout_marginTop="16dp"
-        app:cardCornerRadius="12dp"
-        app:cardElevation="4dp"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="20dp"
+        app:cardBackgroundColor="@color/card_dark"
+        app:cardCornerRadius="14dp"
         app:strokeColor="#333333"
         app:strokeWidth="1dp"
         app:layout_constraintTop_toBottomOf="@id/tvSubtitle">
-
-        <FrameLayout
-            android:layout_width="match_parent"
-            android:layout_height="match_parent"
-            android:background="#000000">
-
-            <androidx.media3.ui.PlayerView
-                android:id="@+id/playerView"
-                android:layout_width="match_parent"
-                android:layout_height="match_parent"
-                app:use_controller="true" />
-
-            <!-- Real-time Subtitle Overlay -->
-            <TextView
-                android:id="@+id/tvActiveSubtitle"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_gravity="bottom|center_horizontal"
-                android:layout_marginBottom="40dp"
-                android:layout_marginHorizontal="16dp"
-                android:background="#B3000000"
-                android:padding="6dp"
-                android:gravity="center"
-                android:textColor="@color/subtitle_yellow"
-                android:textSize="15sp"
-                android:textStyle="bold"
-                android:visibility="gone"
-                tools:text="[Terjemahan Subtitle Muncul Di Sini]" />
-
-            <TextView
-                android:id="@+id/tvPlaceholder"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_gravity="center"
-                android:text="Pilih video untuk mulai memutar"
-                android:textColor="#666666"
-                android:textSize="14sp" />
-        </FrameLayout>
-    </com.google.android.material.card.MaterialCardView>
-
-    <!-- Controls Card -->
-    <com.google.android.material.card.MaterialCardView
-        android:id="@+id/cardControls"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="16dp"
-        app:cardBackgroundColor="@color/card_dark"
-        app:cardCornerRadius="12dp"
-        app:strokeColor="#333333"
-        app:strokeWidth="1dp"
-        app:layout_constraintTop_toBottomOf="@id/cardVideo">
 
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical"
-            android:padding="14dp">
+            android:padding="16dp">
 
-            <Button
-                android:id="@+id/btnSelectVideo"
-                android:layout_width="match_parent"
+            <TextView
+                android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="Pilih File Video"
-                android:textColor="@color/black"
-                app:backgroundTint="@color/accent_cyan" />
+                android:text="Pengaturan Bahasa Game"
+                android:textColor="@color/white"
+                android:textSize="14sp"
+                android:textStyle="bold" />
 
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="horizontal"
-                android:layout_marginTop="10dp">
+                android:layout_marginTop="12dp">
 
                 <LinearLayout
                     android:layout_width="0dp"
@@ -122,8 +72,8 @@
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="Bahasa Asal:"
-                        android:textColor="#AAAAAA"
+                        android:text="Bahasa Game:"
+                        android:textColor="#888888"
                         android:textSize="12sp" />
 
                     <Spinner
@@ -144,7 +94,7 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:text="Terjemahkan Ke:"
-                        android:textColor="#AAAAAA"
+                        android:textColor="#888888"
                         android:textSize="12sp" />
 
                     <Spinner
@@ -154,66 +104,101 @@
                         android:backgroundTint="@color/white" />
                 </LinearLayout>
             </LinearLayout>
+        </LinearLayout>
+    </com.google.android.material.card.MaterialCardView>
+
+    <!-- Main Action Card -->
+    <com.google.android.material.card.MaterialCardView
+        android:id="@+id/cardActions"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="16dp"
+        app:cardBackgroundColor="@color/card_dark"
+        app:cardCornerRadius="14dp"
+        app:strokeColor="#333333"
+        app:strokeWidth="1dp"
+        app:layout_constraintTop_toBottomOf="@id/cardLanguage">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="16dp">
 
             <Button
-                android:id="@+id/btnProcess"
+                android:id="@+id/btnOverlayPermission"
                 android:layout_width="match_parent"
-                android:layout_height="wrap_content"
+                android:layout_height="50dp"
+                android:text="1. Izinkan Layar Mengambang (Wajib)"
+                android:textColor="@color/black"
+                app:backgroundTint="@color/accent_cyan" />
+
+            <Button
+                android:id="@+id/btnStartService"
+                android:layout_width="match_parent"
+                android:layout_height="50dp"
                 android:layout_marginTop="10dp"
-                android:text="Mulai Transkripsi &amp; Terjemahkan"
+                android:text="2. Aktifkan Bola Melayang (Mulai Game)"
                 android:textColor="@color/white"
                 app:backgroundTint="@color/purple_500" />
 
-            <ProgressBar
-                android:id="@+id/progressBar"
+            <Button
+                android:id="@+id/btnStopService"
                 android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
+                android:layout_height="50dp"
+                android:layout_marginTop="10dp"
+                android:text="Matikan Tombol Melayang"
+                android:textColor="@color/white"
                 android:visibility="gone"
-                style="?android:attr/progressBarStyleHorizontal"
-                android:indeterminate="true" />
+                app:backgroundTint="#D32F2F" />
 
             <TextView
                 android:id="@+id/tvStatus"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="6dp"
+                android:layout_marginTop="10dp"
                 android:gravity="center"
-                android:text="Status: Siap"
+                android:text="Status: Klik tombol 1 untuk memberikan izin tampilan."
                 android:textColor="#AAAAAA"
                 android:textSize="12sp" />
         </LinearLayout>
     </com.google.android.material.card.MaterialCardView>
 
-    <!-- Subtitle Preview & Export List -->
-    <TextView
-        android:id="@+id/tvListHeader"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="12dp"
-        android:text="Hasil Subtitle Terjemahan:"
-        android:textColor="@color/white"
-        android:textSize="14sp"
-        android:textStyle="bold"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/cardControls" />
-
-    <Button
-        android:id="@+id/btnExportSrt"
-        android:layout_width="wrap_content"
-        android:layout_height="38dp"
-        android:text="Simpan .SRT"
-        android:textSize="12sp"
-        android:enabled="false"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/cardControls" />
-
-    <androidx.recyclerview.widget.RecyclerView
-        android:id="@+id/rvSubtitles"
+    <!-- Guide Card -->
+    <com.google.android.material.card.MaterialCardView
+        android:id="@+id/cardGuide"
         android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_marginTop="8dp"
-        app:layout_constraintTop_toBottomOf="@id/btnExportSrt"
-        app:layout_constraintBottom_toBottomOf="parent" />
+        android:layout_height="wrap_content"
+        android:layout_marginTop="16dp"
+        app:cardBackgroundColor="#1A1A1A"
+        app:cardCornerRadius="14dp"
+        app:strokeColor="#2A2A2A"
+        app:strokeWidth="1dp"
+        app:layout_constraintTop_toBottomOf="@id/cardActions">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="16dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="🎮 Cara Pakai Saat Main Game:"
+                android:textColor="@color/accent_cyan"
+                android:textSize="14sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:lineSpacingExtra="4dp"
+                android:text="1. Klik 'Aktifkan Bola Melayang' lalu buka game Anda (The Walking Dead, dll.).\n2. Ikon bola melayang 'AI' akan standby di pinggir layar game.\n3. Saat teks dialog/subtitle game muncul, KETUK BOLA TERSEBUT.\n4. Terjemahan bahasa Indonesia langsung melayang di atas layar game tanpa perlu keluar game!"
+                android:textColor="#CCCCCC"
+                android:textSize="12sp" />
+        </LinearLayout>
+    </com.google.android.material.card.MaterialCardView>
 
 </androidx.constraintlayout.widget.ConstraintLayout>
