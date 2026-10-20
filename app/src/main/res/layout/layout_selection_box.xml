@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/rootSelectionBox"
+    android:layout_width="match_parent"
+    android:layout_height="130dp"
+    android:background="@drawable/bg_selection_box"
+    android:padding="6dp">
+
+    <!-- Header bar of selection box -->
+    <LinearLayout
+        android:id="@+id/headerSelectionBox"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:background="#99000000"
+        android:paddingHorizontal="8dp"
+        android:paddingVertical="4dp">
+
+        <TextView
+            android:id="@+id/tvBoxTitle"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="📐 Area Scan Subtitle Game (Geser ke teks dialog)"
+            android:textColor="#00E5FF"
+            android:textSize="11sp"
+            android:textStyle="bold" />
+
+        <Button
+            android:id="@+id/btnLockArea"
+            android:layout_width="wrap_content"
+            android:layout_height="32dp"
+            android:text="✓ Kunci Area"
+            android:textColor="#000000"
+            android:textSize="11sp"
+            android:textStyle="bold"
+            android:backgroundTint="#00E5FF"
+            android:paddingHorizontal="10dp" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/tvBoxHint"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_centerInParent="true"
+        android:text="[ Posisikan kotak ini tepat di atas subtitle game ]"
+        android:textColor="#80FFFFFF"
+        android:textSize="12sp" />
+
+</RelativeLayout>

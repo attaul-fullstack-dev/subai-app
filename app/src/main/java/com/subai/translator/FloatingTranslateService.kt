@@ -18,6 +18,7 @@ import android.os.Build
 import android.os.IBinder
 import android.util.Log
 import android.view.*
+import android.widget.Button
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.view.ContextThemeWrapper
@@ -31,28 +32,45 @@ import kotlinx.coroutines.tasks.await
 class FloatingTranslateService : Service() {
 
     private lateinit var windowManager: WindowManager
+
+    // Overlays
     private var bubbleView: View? = null
+    private var selectionBoxView: View? = null
     private var subtitleView: View? = null
 
+    // LayoutParams
+    private lateinit var bubbleParams: WindowManager.LayoutParams
+    private lateinit var boxParams: WindowManager.LayoutParams
+    private lateinit var subtitleParams: WindowManager.LayoutParams
+
+    // MediaProjection
     private var mediaProjection: MediaProjection? = null
     private var virtualDisplay: VirtualDisplay? = null
     private var imageReader: ImageReader? = null
 
+    // Dimensions
     private var screenWidth = 1080
     private var screenHeight = 2400
     private var screenDensity = 420
 
+    // Crop Coordinates (The exact box over the game's subtitle area)
+    private var cropX = 50
+    private var cropY = 1600
+    private var cropWidth = 980
+    private var cropHeight = 350
+    private var isBoxLocked = false
+
+    // State
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private val translator = MLKitTranslator()
     private val textRecognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
 
     private var sourceLang = "en"
     private var targetLang = "id"
-
     private var isAutoRealtime = true
     private var autoScanJob: Job? = null
     private var lastRecognizedText = ""
-    private var emptyCount = 0
+    private var noTextCount = 0
 
     companion object {
         const val CHANNEL_ID = "subai_overlay_channel"
@@ -77,7 +95,7 @@ class FloatingTranslateService : Service() {
                 startForeground(101, notification)
             }
         } catch (e: Exception) {
-            Log.e("SubAI", "Error starting foreground: ${e.message}")
+            Log.e("SubAI", "Error foreground: ${e.message}")
         }
 
         getScreenMetrics()
@@ -88,6 +106,12 @@ class FloatingTranslateService : Service() {
         screenWidth = metrics.widthPixels.coerceAtLeast(720)
         screenHeight = metrics.heightPixels.coerceAtLeast(1280)
         screenDensity = metrics.densityDpi.coerceAtLeast(160)
+
+        // Default crop box: bottom 30% of screen (standard subtitle position)
+        cropWidth = (screenWidth * 0.92).toInt()
+        cropX = (screenWidth - cropWidth) / 2
+        cropHeight = (screenHeight * 0.22).toInt().coerceAtLeast(200)
+        cropY = (screenHeight * 0.70).toInt()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -103,15 +127,17 @@ class FloatingTranslateService : Service() {
                     val mpManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
                     mediaProjection = mpManager.getMediaProjection(resultCode, resultData)
                     setupVirtualDisplay()
-                    startRealtimeAutoScanner()
                 }
             }
 
             if (bubbleView == null) {
                 setupFloatingBubble()
+                setupSelectionBox()
+                setupSubtitleView()
+                startRealtimeAutoScanner()
             }
         } catch (e: Exception) {
-            Log.e("SubAI", "Error in onStartCommand: ${e.message}")
+            Log.e("SubAI", "onStartCommand error: ${e.message}")
             Toast.makeText(this, "Error memulai: ${e.message}", Toast.LENGTH_LONG).show()
         }
 
@@ -122,98 +148,213 @@ class FloatingTranslateService : Service() {
         try {
             imageReader = ImageReader.newInstance(screenWidth, screenHeight, PixelFormat.RGBA_8888, 2)
             virtualDisplay = mediaProjection?.createVirtualDisplay(
-                "ScreenCapture",
+                "SubScreenCapture",
                 screenWidth, screenHeight, screenDensity,
                 DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
                 imageReader?.surface, null, null
             )
         } catch (e: Exception) {
-            Log.e("SubAI", "VirtualDisplay setup error: ${e.message}")
+            Log.e("SubAI", "VirtualDisplay error: ${e.message}")
         }
     }
 
+    private fun getOverlayType(): Int {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+        } else {
+            WindowManager.LayoutParams.TYPE_PHONE
+        }
+    }
+
+    // 1. FLOATING BUBBLE CONTROLS
     private fun setupFloatingBubble() {
-        try {
-            val themedContext = ContextThemeWrapper(this, R.style.Theme_SubAITranslator)
-            val layoutType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-            } else {
-                WindowManager.LayoutParams.TYPE_PHONE
-            }
-
-            val params = WindowManager.LayoutParams(
-                WindowManager.LayoutParams.WRAP_CONTENT,
-                WindowManager.LayoutParams.WRAP_CONTENT,
-                layoutType,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
-                PixelFormat.TRANSLUCENT
-            ).apply {
-                gravity = Gravity.TOP or Gravity.START
-                x = 30
-                y = screenHeight / 3
-            }
-
-            bubbleView = LayoutInflater.from(themedContext).inflate(R.layout.layout_floating_bubble, null)
-
-            var initialX = 0
-            var initialY = 0
-            var initialTouchX = 0f
-            var initialTouchY = 0f
-            var isClick = false
-
-            bubbleView?.setOnTouchListener { _, event ->
-                when (event.action) {
-                    MotionEvent.ACTION_DOWN -> {
-                        initialX = params.x
-                        initialY = params.y
-                        initialTouchX = event.rawX
-                        initialTouchY = event.rawY
-                        isClick = true
-                        true
-                    }
-                    MotionEvent.ACTION_MOVE -> {
-                        val diffX = (event.rawX - initialTouchX).toInt()
-                        val diffY = (event.rawY - initialTouchY).toInt()
-                        if (Math.abs(diffX) > 10 || Math.abs(diffY) > 10) {
-                            isClick = false
-                        }
-                        params.x = initialX + diffX
-                        params.y = initialY + diffY
-                        windowManager.updateViewLayout(bubbleView, params)
-                        true
-                    }
-                    MotionEvent.ACTION_UP -> {
-                        if (isClick) {
-                            isAutoRealtime = !isAutoRealtime
-                            if (isAutoRealtime) {
-                                startRealtimeAutoScanner()
-                                Toast.makeText(this, "Real-Time Auto: AKTIF", Toast.LENGTH_SHORT).show()
-                            } else {
-                                autoScanJob?.cancel()
-                                hideFloatingSubtitle()
-                                Toast.makeText(this, "Real-Time Auto: JEDA", Toast.LENGTH_SHORT).show()
-                            }
-                        }
-                        true
-                    }
-                    else -> false
-                }
-            }
-
-            windowManager.addView(bubbleView, params)
-        } catch (e: Exception) {
-            Log.e("SubAI", "Floating bubble setup error: ${e.message}")
-            Toast.makeText(this, "Gagal menampilkan bola: ${e.message}", Toast.LENGTH_LONG).show()
+        val themedContext = ContextThemeWrapper(this, R.style.Theme_SubAITranslator)
+        bubbleParams = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            getOverlayType(),
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = 20
+            y = screenHeight / 4
         }
+
+        bubbleView = LayoutInflater.from(themedContext).inflate(R.layout.layout_floating_bubble, null)
+
+        val cardBubble = bubbleView?.findViewById<View>(R.id.cardBubble)
+        val quickMenu = bubbleView?.findViewById<View>(R.id.layoutQuickMenu)
+        val btnMenuArea = bubbleView?.findViewById<Button>(R.id.btnMenuArea)
+        val btnMenuToggle = bubbleView?.findViewById<Button>(R.id.btnMenuToggleAuto)
+        val btnMenuClose = bubbleView?.findViewById<View>(R.id.btnMenuClose)
+
+        var initialX = 0
+        var initialY = 0
+        var initialTouchX = 0f
+        var initialTouchY = 0f
+        var isClick = false
+
+        cardBubble?.setOnTouchListener { _, event ->
+            when (event.action) {
+                MotionEvent.ACTION_DOWN -> {
+                    initialX = bubbleParams.x
+                    initialY = bubbleParams.y
+                    initialTouchX = event.rawX
+                    initialTouchY = event.rawY
+                    isClick = true
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val dx = (event.rawX - initialTouchX).toInt()
+                    val dy = (event.rawY - initialTouchY).toInt()
+                    if (Math.abs(dx) > 10 || Math.abs(dy) > 10) isClick = false
+                    bubbleParams.x = initialX + dx
+                    bubbleParams.y = initialY + dy
+                    windowManager.updateViewLayout(bubbleView, bubbleParams)
+                    true
+                }
+                MotionEvent.ACTION_UP -> {
+                    if (isClick) {
+                        // Toggle Menu Visibility
+                        quickMenu?.visibility = if (quickMenu?.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+                    }
+                    true
+                }
+                else -> false
+            }
+        }
+
+        // Menu: Show / Adjust Selection Area Box
+        btnMenuArea?.setOnClickListener {
+            quickMenu?.visibility = View.GONE
+            showSelectionBoxForAdjustment()
+        }
+
+        // Menu: Toggle Realtime ON / OFF
+        btnMenuToggle?.setOnClickListener {
+            isAutoRealtime = !isAutoRealtime
+            if (isAutoRealtime) {
+                btnMenuToggle.text = "▶️ Auto: ON"
+                btnMenuToggle.setBackgroundColor(0xFF00E5FF.toInt())
+                startRealtimeAutoScanner()
+                Toast.makeText(this, "Real-Time Auto: AKTIF", Toast.LENGTH_SHORT).show()
+            } else {
+                btnMenuToggle.text = "⏸️ Jeda"
+                btnMenuToggle.setBackgroundColor(0xFFFF9800.toInt())
+                autoScanJob?.cancel()
+                subtitleView?.visibility = View.GONE
+                Toast.makeText(this, "Real-Time Auto: JEDA", Toast.LENGTH_SHORT).show()
+            }
+        }
+
+        btnMenuClose?.setOnClickListener {
+            stopSelf()
+        }
+
+        windowManager.addView(bubbleView, bubbleParams)
     }
 
+    // 2. SELECTION / CROP BOX (Like base.apk's DragScaleView)
+    private fun setupSelectionBox() {
+        val themedContext = ContextThemeWrapper(this, R.style.Theme_SubAITranslator)
+        boxParams = WindowManager.LayoutParams(
+            cropWidth,
+            cropHeight,
+            getOverlayType(),
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = cropX
+            y = cropY
+        }
+
+        selectionBoxView = LayoutInflater.from(themedContext).inflate(R.layout.layout_selection_box, null)
+
+        val btnLock = selectionBoxView?.findViewById<Button>(R.id.btnLockArea)
+        val header = selectionBoxView?.findViewById<View>(R.id.headerSelectionBox)
+        val tvHint = selectionBoxView?.findViewById<View>(R.id.tvBoxHint)
+
+        var initialX = 0
+        var initialY = 0
+        var touchX = 0f
+        var touchY = 0f
+
+        selectionBoxView?.setOnTouchListener { _, event ->
+            if (isBoxLocked) return@setOnTouchListener false
+            when (event.action) {
+                MotionEvent.ACTION_DOWN -> {
+                    initialX = boxParams.x
+                    initialY = boxParams.y
+                    touchX = event.rawX
+                    touchY = event.rawY
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    boxParams.x = (initialX + (event.rawX - touchX).toInt()).coerceIn(0, screenWidth - cropWidth)
+                    boxParams.y = (initialY + (event.rawY - touchY).toInt()).coerceIn(0, screenHeight - cropHeight)
+                    cropX = boxParams.x
+                    cropY = boxParams.y
+                    windowManager.updateViewLayout(selectionBoxView, boxParams)
+                    true
+                }
+                else -> false
+            }
+        }
+
+        btnLock?.setOnClickListener {
+            isBoxLocked = true
+            header?.visibility = View.GONE
+            tvHint?.visibility = View.GONE
+            selectionBoxView?.setBackgroundResource(0) // completely transparent during gameplay
+            Toast.makeText(this, "Area subtitle terkunci! Mulai scan real-time.", Toast.LENGTH_SHORT).show()
+        }
+
+        windowManager.addView(selectionBoxView, boxParams)
+    }
+
+    private fun showSelectionBoxForAdjustment() {
+        isBoxLocked = false
+        selectionBoxView?.setBackgroundResource(R.drawable.bg_selection_box)
+        selectionBoxView?.findViewById<View>(R.id.headerSelectionBox)?.visibility = View.VISIBLE
+        selectionBoxView?.findViewById<View>(R.id.tvBoxHint)?.visibility = View.VISIBLE
+        Toast.makeText(this, "Geser kotak ke tempat dialog game muncul, lalu klik Kunci Area.", Toast.LENGTH_LONG).show()
+    }
+
+    // 3. SUBTITLE OVERLAY (Displayed safely ABOVE the selection box to prevent OCR recursion!)
+    private fun setupSubtitleView() {
+        val themedContext = ContextThemeWrapper(this, R.style.Theme_SubAITranslator)
+        subtitleParams = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            getOverlayType(),
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = 0
+            // Positioned ABOVE the crop box (with 10px margin) so OCR NEVER sees it!
+            y = (cropY - 180).coerceAtLeast(60)
+        }
+
+        subtitleView = LayoutInflater.from(themedContext).inflate(R.layout.layout_floating_subtitle, null)
+        subtitleView?.findViewById<View>(R.id.btnCloseSubtitle)?.setOnClickListener {
+            subtitleView?.visibility = View.GONE
+        }
+        subtitleView?.visibility = View.GONE
+
+        windowManager.addView(subtitleView, subtitleParams)
+    }
+
+    // 4. CONTINUOUS REAL-TIME OCR & TRANSLATION ENGINE
     private fun startRealtimeAutoScanner() {
         autoScanJob?.cancel()
         autoScanJob = serviceScope.launch(Dispatchers.IO) {
             while (isActive && isAutoRealtime) {
                 try {
-                    processScreenForSubtitle()
-                    delay(500)
+                    processCropAreaForSubtitle()
+                    delay(550) // Scan every 550ms
                 } catch (e: Exception) {
                     delay(1000)
                 }
@@ -221,42 +362,69 @@ class FloatingTranslateService : Service() {
         }
     }
 
-    private suspend fun processScreenForSubtitle() {
-        val frameBitmap = captureLatestFrame() ?: return
+    private suspend fun processCropAreaForSubtitle() {
+        val fullBitmap = captureLatestFrame() ?: return
 
-        val startY = (screenHeight * 0.55).toInt().coerceAtMost(screenHeight - 100)
-        val cropHeight = (screenHeight - startY)
+        // 1. CROP ONLY THE SELECTED GAME SUBTITLE AREA
+        val safeX = cropX.coerceIn(0, fullBitmap.width - 10)
+        val safeY = cropY.coerceIn(0, fullBitmap.height - 10)
+        val safeW = cropWidth.coerceAtMost(fullBitmap.width - safeX)
+        val safeH = cropHeight.coerceAtMost(fullBitmap.height - safeY)
+
         val croppedBitmap = try {
-            Bitmap.createBitmap(frameBitmap, 0, startY, screenWidth, cropHeight)
+            Bitmap.createBitmap(fullBitmap, safeX, safeY, safeW, safeH)
         } catch (e: Exception) {
-            frameBitmap
+            return
         }
 
         val inputImage = InputImage.fromBitmap(croppedBitmap, 0)
         try {
             val visionText = textRecognizer.process(inputImage).await()
-            val cleanText = visionText.text.trim().replace("\n", " ")
+            val rawText = visionText.text.trim().replace("\n", " ")
 
-            if (cleanText.length >= 3) {
-                emptyCount = 0
+            // Filter out system words or empty noise
+            val cleanText = if (rawText.contains("SubAI", ignoreCase = true) || rawText.contains("Real-Time", ignoreCase = true)) {
+                ""
+            } else {
+                rawText
+            }
+
+            if (cleanText.length >= 2) {
+                noTextCount = 0
+                // ONLY translate if text actually changed!
                 if (cleanText != lastRecognizedText) {
                     lastRecognizedText = cleanText
                     val translated = translator.translate(cleanText, sourceLang, targetLang)
                     withContext(Dispatchers.Main) {
-                        showFloatingSubtitle(cleanText, translated)
+                        updateSubtitleDisplay(cleanText, translated)
                     }
                 }
             } else {
-                emptyCount++
-                if (emptyCount >= 6) {
+                noTextCount++
+                // Automatically hide when dialogue finished (> 2.5 seconds empty)
+                if (noTextCount >= 5) {
                     withContext(Dispatchers.Main) {
-                        hideFloatingSubtitle()
+                        subtitleView?.visibility = View.GONE
+                        lastRecognizedText = ""
                     }
                 }
             }
         } catch (e: Exception) {
-            // Ignore temporary frame OCR errors
+            // Ignore temporary OCR errors
         }
+    }
+
+    private fun updateSubtitleDisplay(original: String, translated: String) {
+        subtitleView?.findViewById<TextView>(R.id.tvTranslatedGameText)?.text = translated
+        subtitleView?.findViewById<TextView>(R.id.tvOriginalGameText)?.text = original
+
+        // Keep subtitle bar neatly above the crop box
+        subtitleParams.y = (cropY - 180).coerceAtLeast(60)
+        try {
+            windowManager.updateViewLayout(subtitleView, subtitleParams)
+        } catch (e: Exception) {}
+
+        subtitleView?.visibility = View.VISIBLE
     }
 
     private fun captureLatestFrame(): Bitmap? {
@@ -287,53 +455,11 @@ class FloatingTranslateService : Service() {
         }
     }
 
-    private fun showFloatingSubtitle(original: String, translated: String) {
-        try {
-            if (subtitleView == null) {
-                val themedContext = ContextThemeWrapper(this, R.style.Theme_SubAITranslator)
-                val layoutType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-                } else {
-                    WindowManager.LayoutParams.TYPE_PHONE
-                }
-
-                val params = WindowManager.LayoutParams(
-                    WindowManager.LayoutParams.MATCH_PARENT,
-                    WindowManager.LayoutParams.WRAP_CONTENT,
-                    layoutType,
-                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
-                    PixelFormat.TRANSLUCENT
-                ).apply {
-                    gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
-                    y = 60
-                }
-
-                subtitleView = LayoutInflater.from(themedContext).inflate(R.layout.layout_floating_subtitle, null)
-
-                subtitleView?.findViewById<View>(R.id.btnCloseSubtitle)?.setOnClickListener {
-                    hideFloatingSubtitle()
-                }
-
-                windowManager.addView(subtitleView, params)
-            }
-
-            subtitleView?.findViewById<TextView>(R.id.tvOriginalGameText)?.text = original
-            subtitleView?.findViewById<TextView>(R.id.tvTranslatedGameText)?.text = translated
-            subtitleView?.visibility = View.VISIBLE
-        } catch (e: Exception) {
-            Log.e("SubAI", "Error showing subtitle: ${e.message}")
-        }
-    }
-
-    private fun hideFloatingSubtitle() {
-        subtitleView?.visibility = View.GONE
-    }
-
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 CHANNEL_ID,
-                "Game Translator Service",
+                "Game Subtitle Service",
                 NotificationManager.IMPORTANCE_LOW
             )
             val manager = getSystemService(NotificationManager::class.java)
@@ -343,8 +469,8 @@ class FloatingTranslateService : Service() {
 
     private fun createNotification(): Notification {
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("SubAI Real-Time Game Translator")
-            .setContentText("Menerjemahkan subtitle game secara otomatis real-time")
+            .setContentTitle("SubAI Game Translator")
+            .setContentText("Menerjemahkan area subtitle game secara real-time")
             .setSmallIcon(R.mipmap.ic_launcher)
             .build()
     }
@@ -356,6 +482,7 @@ class FloatingTranslateService : Service() {
         textRecognizer.close()
 
         bubbleView?.let { try { windowManager.removeView(it) } catch (e: Exception) {} }
+        selectionBoxView?.let { try { windowManager.removeView(it) } catch (e: Exception) {} }
         subtitleView?.let { try { windowManager.removeView(it) } catch (e: Exception) {} }
 
         virtualDisplay?.release()
