@@ -15,3 +15,4 @@ Aplikasi Android untuk memutar video, menghasilkan subtitle otomatis, dan menerj
 3. Tunggu workflow **Build SubAI Android APK** selesai (~2 menit).
 4. Klik workflow run tersebut, lalu unduh artifact **SubAI-Translator-APK** (`app-debug.apk`).
 5. Install di HP Android Anda!
+
