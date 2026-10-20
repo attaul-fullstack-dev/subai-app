@@ -109,7 +109,7 @@ class DragScaleView @JvmOverloads constructor(
                 downRawY = event.rawY
 
                 currentMode = detectTouchMode(event.x, event.y)
-                parentView.requestDisallowInterceptTouchEvent(true)
+                parent?.requestDisallowInterceptTouchEvent(true)
                 return true
             }
 
