@@ -24,6 +24,7 @@ import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import kotlinx.coroutines.*
+import kotlinx.coroutines.tasks.await
 
 class FloatingTranslateService : Service() {
 
@@ -45,6 +46,12 @@ class FloatingTranslateService : Service() {
 
     private var sourceLang = "en"
     private var targetLang = "id"
+
+    // Real-time automatic scanner
+    private var isAutoRealtime = true
+    private var autoScanJob: Job? = null
+    private var lastRecognizedText = ""
+    private var emptyCount = 0
 
     companion object {
         const val CHANNEL_ID = "subai_overlay_channel"
@@ -84,6 +91,7 @@ class FloatingTranslateService : Service() {
                 val mpManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
                 mediaProjection = mpManager.getMediaProjection(resultCode, resultData)
                 setupVirtualDisplay()
+                startRealtimeAutoScanner()
             }
         }
 
@@ -131,7 +139,7 @@ class FloatingTranslateService : Service() {
         var initialTouchY = 0f
         var isClick = false
 
-        bubbleView?.setOnTouchListener { view, event ->
+        bubbleView?.setOnTouchListener { _, event ->
             when (event.action) {
                 MotionEvent.ACTION_DOWN -> {
                     initialX = params.x
@@ -154,7 +162,16 @@ class FloatingTranslateService : Service() {
                 }
                 MotionEvent.ACTION_UP -> {
                     if (isClick) {
-                        captureAndTranslateScreen()
+                        // Toggle Realtime ON / OFF
+                        isAutoRealtime = !isAutoRealtime
+                        if (isAutoRealtime) {
+                            startRealtimeAutoScanner()
+                            Toast.makeText(this, "Real-Time Auto Translate: AKTIF", Toast.LENGTH_SHORT).show()
+                        } else {
+                            autoScanJob?.cancel()
+                            hideFloatingSubtitle()
+                            Toast.makeText(this, "Real-Time Auto Translate: JEDA", Toast.LENGTH_SHORT).show()
+                        }
                     }
                     true
                 }
@@ -165,37 +182,58 @@ class FloatingTranslateService : Service() {
         windowManager.addView(bubbleView, params)
     }
 
-    private fun captureAndTranslateScreen() {
-        Toast.makeText(this, "Membaca teks game di layar...", Toast.LENGTH_SHORT).show()
-
-        serviceScope.launch(Dispatchers.IO) {
-            val bitmap = captureLatestFrame()
-            if (bitmap == null) {
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(this@FloatingTranslateService, "Gagal menangkap layar. Buka ulang aplikasi.", Toast.LENGTH_SHORT).show()
+    private fun startRealtimeAutoScanner() {
+        autoScanJob?.cancel()
+        autoScanJob = serviceScope.launch(Dispatchers.IO) {
+            while (isActive && isAutoRealtime) {
+                try {
+                    processScreenForSubtitle()
+                    delay(500) // Scan setiap 500ms (Real-Time lancar tanpa lag)
+                } catch (e: Exception) {
+                    delay(1000)
                 }
-                return@launch
             }
+        }
+    }
 
-            val inputImage = InputImage.fromBitmap(bitmap, 0)
-            textRecognizer.process(inputImage)
-                .addOnSuccessListener { visionText ->
-                    val detectedText = visionText.text.trim()
-                    if (detectedText.isEmpty()) {
-                        Toast.makeText(this@FloatingTranslateService, "Tidak ada teks/subtitle terdeteksi di layar.", Toast.LENGTH_SHORT).show()
-                        return@addOnSuccessListener
-                    }
+    private suspend fun processScreenForSubtitle() {
+        val frameBitmap = captureLatestFrame() ?: return
 
-                    serviceScope.launch(Dispatchers.IO) {
-                        val translated = translator.translate(detectedText, sourceLang, targetLang)
-                        withContext(Dispatchers.Main) {
-                            showFloatingSubtitle(detectedText, translated)
-                        }
+        // Crop area subtitle (fokus ke 40% bagian bawah layar tempat teks dialog game berada)
+        val startY = (screenHeight * 0.55).toInt().coerceAtMost(screenHeight - 100)
+        val cropHeight = (screenHeight - startY)
+        val croppedBitmap = try {
+            Bitmap.createBitmap(frameBitmap, 0, startY, screenWidth, cropHeight)
+        } catch (e: Exception) {
+            frameBitmap
+        }
+
+        val inputImage = InputImage.fromBitmap(croppedBitmap, 0)
+        try {
+            val visionText = textRecognizer.process(inputImage).await()
+            val cleanText = visionText.text.trim().replace("\n", " ")
+
+            if (cleanText.length >= 3) {
+                emptyCount = 0
+                // Hanya terjemahkan jika teks dialog game berubah
+                if (cleanText != lastRecognizedText) {
+                    lastRecognizedText = cleanText
+                    val translated = translator.translate(cleanText, sourceLang, targetLang)
+                    withContext(Dispatchers.Main) {
+                        showFloatingSubtitle(cleanText, translated)
                     }
                 }
-                .addOnFailureListener {
-                    Toast.makeText(this@FloatingTranslateService, "Error membaca teks.", Toast.LENGTH_SHORT).show()
+            } else {
+                emptyCount++
+                // Sembunyikan jika tidak ada subtitle game selama 3 detik
+                if (emptyCount >= 6) {
+                    withContext(Dispatchers.Main) {
+                        hideFloatingSubtitle()
+                    }
                 }
+            }
+        } catch (e: Exception) {
+            // Abaikan error frame sementara
         }
     }
 
@@ -234,7 +272,7 @@ class FloatingTranslateService : Service() {
                 PixelFormat.TRANSLUCENT
             ).apply {
                 gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
-                y = 80
+                y = 60
             }
 
             subtitleView = LayoutInflater.from(this).inflate(R.layout.layout_floating_subtitle, null)
@@ -269,8 +307,8 @@ class FloatingTranslateService : Service() {
 
     private fun createNotification(): Notification {
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("SubAI Game Translator Aktif")
-            .setContentText("Bola melayang siap menerjemahkan teks game di layar")
+            .setContentTitle("SubAI Real-Time Game Translator Aktif")
+            .setContentText("Menerjemahkan subtitle game secara otomatis real-time")
             .setSmallIcon(R.mipmap.ic_launcher)
             .build()
     }
@@ -278,6 +316,7 @@ class FloatingTranslateService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         serviceScope.cancel()
+        autoScanJob?.cancel()
         textRecognizer.close()
 
         bubbleView?.let { windowManager.removeView(it) }
