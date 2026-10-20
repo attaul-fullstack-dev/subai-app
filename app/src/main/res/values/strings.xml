@@ -1,0 +1,9 @@
+<resources>
+    <string name="app_name">SubAI Translator</string>
+    <string name="select_video">Pilih Video</string>
+    <string name="source_language">Bahasa Asal</string>
+    <string name="target_language">Bahasa Terjemahan</string>
+    <string name="start_transcription">Generate &amp; Terjemahkan Subtitle</string>
+    <string name="export_srt">Export File .SRT</string>
+    <string name="status_ready">Siap. Pilih file video untuk memulai.</string>
+</resources>
