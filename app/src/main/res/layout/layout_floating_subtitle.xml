@@ -1,40 +1,30 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/cardSubtitleBox"
-    android:layout_width="wrap_content"
+    android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:orientation="vertical"
     android:gravity="center"
     android:background="@drawable/bg_floating_subtitle"
-    android:paddingHorizontal="16dp"
-    android:paddingVertical="8dp"
+    android:paddingHorizontal="12dp"
+    android:paddingVertical="6dp"
     android:elevation="14dp">
 
-    <!-- Translated Indonesian Dialogue (Cinematic Game Subtitle Style) -->
+    <!-- Compact Cinematic Game Subtitle (Max 2 lines, yellow, high-contrast) -->
     <TextView
         android:id="@+id/tvTranslatedGameText"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:textColor="#FFEB3B"
-        android:textSize="16sp"
+        android:textSize="14sp"
         android:textStyle="bold"
         android:gravity="center"
+        android:maxLines="2"
+        android:ellipsize="end"
         android:shadowColor="#000000"
         android:shadowDx="2"
         android:shadowDy="2"
-        android:shadowRadius="4"
-        android:text="[ Menunggu dialog game... ]" />
-
-    <!-- Original English Dialogue (Muted) -->
-    <TextView
-        android:id="@+id/tvOriginalGameText"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="2dp"
-        android:textColor="#B0BEC5"
-        android:textSize="11sp"
-        android:gravity="center"
-        android:visibility="gone"
+        android:shadowRadius="3"
         android:text="" />
 
 </LinearLayout>

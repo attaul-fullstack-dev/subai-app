@@ -10,6 +10,7 @@ import android.content.pm.ServiceInfo
 import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.PixelFormat
+import android.graphics.Rect
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
 import android.media.ImageReader
@@ -25,7 +26,6 @@ import android.view.*
 import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.TextView
-import android.widget.Toast
 import androidx.appcompat.view.ContextThemeWrapper
 import androidx.core.app.NotificationCompat
 import com.google.mlkit.vision.common.InputImage
@@ -76,6 +76,7 @@ class FloatingTranslateService : Service() {
     private var isAutoRealtime = true
     private var autoScanJob: Job? = null
     private var lastRecognizedText = ""
+    private var currentDisplayedTranslation = ""
     private var noTextCount = 0
 
     companion object {
@@ -128,9 +129,9 @@ class FloatingTranslateService : Service() {
 
     private fun initDefaultCropRegion() {
         if (screenWidth > screenHeight) {
-            // LANDSCAPE MODE (e.g. Playing The Walking Dead)
-            // Dialogue subtitles are at the bottom center of the game screen
-            cropWidth = (screenWidth * 0.72).toInt()
+            // LANDSCAPE MODE (Game play: e.g. The Walking Dead)
+            // Dialogue choices / subtitles are at the bottom of the screen
+            cropWidth = (screenWidth * 0.70).toInt()
             cropHeight = (screenHeight * 0.22).toInt().coerceAtLeast(140)
             cropX = (screenWidth - cropWidth) / 2
             cropY = (screenHeight * 0.74).toInt()
@@ -165,7 +166,6 @@ class FloatingTranslateService : Service() {
             initDefaultCropRegion()
             reconfigureVirtualDisplay()
 
-            // Update bubble position
             if (::bubbleParams.isInitialized && bubbleView != null) {
                 bubbleParams.x = 20
                 bubbleParams.y = screenHeight / 3
@@ -200,11 +200,10 @@ class FloatingTranslateService : Service() {
             if (bubbleView == null) {
                 setupFloatingBubble()
                 setupSubtitleView()
-                showSelectionOverlay() // Open Drag & Scale calibration on start
+                showSelectionOverlay()
             }
         } catch (e: Exception) {
             Log.e("SubAI", "onStartCommand error: ${e.message}")
-            Toast.makeText(this, "Error: ${e.message}", Toast.LENGTH_LONG).show()
         }
 
         return START_NOT_STICKY
@@ -306,26 +305,22 @@ class FloatingTranslateService : Service() {
             }
         }
 
-        // Tap Menu Area -> Opens the Drag & Scale Selection Overlay
         btnMenuArea?.setOnClickListener {
             quickMenu?.visibility = View.GONE
             showSelectionOverlay()
         }
 
-        // Tap Toggle Auto
         btnMenuToggle?.setOnClickListener {
             isAutoRealtime = !isAutoRealtime
             if (isAutoRealtime) {
                 btnMenuToggle.text = "▶️ Auto: ON"
                 btnMenuToggle.setBackgroundColor(0xFF00E5FF.toInt())
                 startRealtimeAutoScanner()
-                Toast.makeText(this, "Real-Time Auto: AKTIF", Toast.LENGTH_SHORT).show()
             } else {
                 btnMenuToggle.text = "⏸️ Jeda"
                 btnMenuToggle.setBackgroundColor(0xFFFF9800.toInt())
                 autoScanJob?.cancel()
                 subtitleView?.visibility = View.GONE
-                Toast.makeText(this, "Real-Time Auto: JEDA", Toast.LENGTH_SHORT).show()
             }
         }
 
@@ -337,10 +332,14 @@ class FloatingTranslateService : Service() {
     }
 
     // =========================================================================
-    // 2. INTERACTIVE DRAG & SCALE SELECTION OVERLAY (Identical to base.apk)
+    // 2. SELECTION OVERLAY (Calibration Window)
     // =========================================================================
     private fun showSelectionOverlay() {
         if (selectionOverlayView != null) return
+
+        // Pause active scanner while adjusting area
+        autoScanJob?.cancel()
+        subtitleView?.visibility = View.GONE
 
         val themedContext = ContextThemeWrapper(this, R.style.Theme_SubAITranslator)
         selectionOverlayView = LayoutInflater.from(themedContext).inflate(R.layout.layout_crop_selection, null)
@@ -351,13 +350,11 @@ class FloatingTranslateService : Service() {
         val btnPreset = selectionOverlayView?.findViewById<Button>(R.id.btnPresetBottom)
         val btnCancel = selectionOverlayView?.findViewById<Button>(R.id.btnCancelArea)
 
-        // Ensure current crop values are valid within screen
         cropWidth = cropWidth.coerceIn(200, screenWidth - 20)
         cropHeight = cropHeight.coerceIn(100, screenHeight - 20)
         cropX = cropX.coerceIn(0, screenWidth - cropWidth)
         cropY = cropY.coerceIn(0, screenHeight - cropHeight)
 
-        // Set initial frame for DragScaleView
         val lp = FrameLayout.LayoutParams(cropWidth, cropHeight).apply {
             leftMargin = cropX
             topMargin = cropY
@@ -369,7 +366,6 @@ class FloatingTranslateService : Service() {
                 val tbH = layoutToolbar.height.takeIf { it > 0 } ?: (48 * resources.displayMetrics.density).toInt()
                 val tbW = layoutToolbar.width.takeIf { it > 0 } ?: (280 * resources.displayMetrics.density).toInt()
 
-                // If enough room above the box, place toolbar above; otherwise below
                 val targetY = if (boxTop - tbH - 20 > 50) {
                     (boxTop - tbH - 20).toFloat()
                 } else {
@@ -392,14 +388,21 @@ class FloatingTranslateService : Service() {
             }
         }
 
-        // Lock Area Button
+        // Lock button (NO TOAST! To avoid OCR scanning the toast text!)
         btnLock?.setOnClickListener {
             hideSelectionOverlay()
-            Toast.makeText(this, "✓ Area subtitle dikunci! SubAI siap menerjemahkan.", Toast.LENGTH_SHORT).show()
-            startRealtimeAutoScanner()
+            // Reset state
+            lastRecognizedText = ""
+            currentDisplayedTranslation = ""
+            isSubtitleManuallyDragged = false
+            updateSubtitlePosition()
+            // Start scanning with small delay to let UI settle
+            serviceScope.launch {
+                delay(350)
+                startRealtimeAutoScanner()
+            }
         }
 
-        // Preset Bottom Button
         btnPreset?.setOnClickListener {
             initDefaultCropRegion()
             val newLp = FrameLayout.LayoutParams(cropWidth, cropHeight).apply {
@@ -411,9 +414,9 @@ class FloatingTranslateService : Service() {
             updateToolbarPosition(cropX, cropY, cropWidth, cropHeight)
         }
 
-        // Cancel / Dismiss Button
         btnCancel?.setOnClickListener {
             hideSelectionOverlay()
+            startRealtimeAutoScanner()
         }
 
         selectionOverlayView?.post {
@@ -441,27 +444,28 @@ class FloatingTranslateService : Service() {
     }
 
     // =========================================================================
-    // 3. SLEEK SUBTITLE OVERLAY (Cinematic Game Subtitle Pill)
+    // 3. SLEEK SUBTITLE OVERLAY (Strictly Kept Outside The Crop Area)
     // =========================================================================
     private fun setupSubtitleView() {
         if (subtitleView != null) return
         val themedContext = ContextThemeWrapper(this, R.style.Theme_SubAITranslator)
 
+        val safeY = calculateSafeSubtitleY()
+
         subtitleParams = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.WRAP_CONTENT,
+            cropWidth,
             WindowManager.LayoutParams.WRAP_CONTENT,
             getOverlayType(),
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
             PixelFormat.TRANSLUCENT
         ).apply {
-            gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
-            x = 0
-            y = (cropY - 120).coerceAtLeast(40)
+            gravity = Gravity.TOP or Gravity.START
+            x = cropX
+            y = safeY
         }
 
         subtitleView = LayoutInflater.from(themedContext).inflate(R.layout.layout_floating_subtitle, null)
 
-        // Allow user to drag subtitle bar anywhere if desired
         var initialY = 0
         var touchY = 0f
         subtitleView?.setOnTouchListener { _, event ->
@@ -488,34 +492,40 @@ class FloatingTranslateService : Service() {
         windowManager.addView(subtitleView, subtitleParams)
     }
 
-    private fun showSubtitle(original: String, translated: String) {
+    private fun calculateSafeSubtitleY(): Int {
+        // If crop box is in the bottom half of the screen, put subtitle ABOVE crop box
+        // If in top half, put subtitle BELOW crop box.
+        // NEVER overlap crop box!
+        val subHeightEstimate = (48 * resources.displayMetrics.density).toInt()
+        return if (cropY > screenHeight / 2) {
+            (cropY - subHeightEstimate - 16).coerceAtLeast(20)
+        } else {
+            (cropY + cropHeight + 16).coerceAtMost(screenHeight - subHeightEstimate - 20)
+        }
+    }
+
+    private fun updateSubtitlePosition() {
+        if (subtitleView == null || !::subtitleParams.isInitialized) return
+        subtitleParams.x = cropX
+        subtitleParams.width = cropWidth
+        if (!isSubtitleManuallyDragged) {
+            subtitleParams.y = calculateSafeSubtitleY()
+        }
+        try {
+            windowManager.updateViewLayout(subtitleView, subtitleParams)
+        } catch (e: Exception) {}
+    }
+
+    private fun showSubtitle(translated: String) {
         if (subtitleView == null) setupSubtitleView()
 
         subtitleView?.findViewById<TextView>(R.id.tvTranslatedGameText)?.text = translated
-        val tvOrig = subtitleView?.findViewById<TextView>(R.id.tvOriginalGameText)
-        if (original.isNotEmpty() && original != translated) {
-            tvOrig?.text = original
-            tvOrig?.visibility = View.VISIBLE
-        } else {
-            tvOrig?.visibility = View.GONE
-        }
-
-        if (!isSubtitleManuallyDragged) {
-            subtitleParams.y = if (cropY > 150) {
-                (cropY - 110).coerceAtLeast(30)
-            } else {
-                (cropY + cropHeight + 20).coerceAtMost(screenHeight - 120)
-            }
-            try {
-                windowManager.updateViewLayout(subtitleView, subtitleParams)
-            } catch (e: Exception) {}
-        }
-
+        updateSubtitlePosition()
         subtitleView?.visibility = View.VISIBLE
     }
 
     // =========================================================================
-    // 4. REAL-TIME AUTO OCR & TRANSLATION ENGINE
+    // 4. REAL-TIME AUTO OCR & TRANSLATION ENGINE (With Self-Loop Prevention)
     // =========================================================================
     private fun startRealtimeAutoScanner() {
         autoScanJob?.cancel()
@@ -523,7 +533,7 @@ class FloatingTranslateService : Service() {
             while (isActive && isAutoRealtime) {
                 try {
                     processCropAreaForSubtitle()
-                    delay(500) // Scan every 500ms
+                    delay(550)
                 } catch (e: Exception) {
                     delay(1000)
                 }
@@ -542,6 +552,17 @@ class FloatingTranslateService : Service() {
         val safeW = cropWidth.coerceIn(20, bmWidth - safeX)
         val safeH = cropHeight.coerceIn(20, bmHeight - safeY)
 
+        // VERIFY: If subtitleView is visible and intersects crop rect, SKIP frame to prevent recursion!
+        if (subtitleView?.visibility == View.VISIBLE && ::subtitleParams.isInitialized) {
+            val subH = subtitleView?.height?.takeIf { it > 0 } ?: (48 * resources.displayMetrics.density).toInt()
+            val subRect = Rect(subtitleParams.x, subtitleParams.y, subtitleParams.x + subtitleParams.width, subtitleParams.y + subH)
+            val cropRect = Rect(safeX, safeY, safeX + safeW, safeY + safeH)
+            if (Rect.intersects(subRect, cropRect)) {
+                Log.w("SubAI", "Subtitle box intersects crop area! Skipping frame to prevent feedback loop.")
+                return
+            }
+        }
+
         val croppedBitmap = try {
             Bitmap.createBitmap(fullBitmap, safeX, safeY, safeW, safeH)
         } catch (e: Exception) {
@@ -553,31 +574,53 @@ class FloatingTranslateService : Service() {
             val visionText = textRecognizer.process(inputImage).await()
             val rawText = visionText.text.trim().replace("\n", " ")
 
-            val cleanText = if (rawText.contains("SubAI", ignoreCase = true) ||
-                rawText.contains("Kunci Area", ignoreCase = true) ||
-                rawText.contains("Geser", ignoreCase = true) ||
-                rawText.contains("Tarik", ignoreCase = true)) {
-                ""
-            } else {
-                rawText
+            val lower = rawText.lowercase()
+
+            // 1. RECURSION GUARD: Reject any text matching app strings or previous translations
+            if (lower.contains("subai") ||
+                lower.contains("kunci area") ||
+                lower.contains("menerjemahkan") ||
+                lower.contains("subtitle") ||
+                lower.contains("tarik sudut") ||
+                lower.contains("bawah game") ||
+                lower.contains("siap menerjemahkan")) {
+                return
             }
+
+            // Check if it matches what is currently displayed on screen
+            if (currentDisplayedTranslation.isNotEmpty()) {
+                val currentWords = currentDisplayedTranslation.lowercase().split(" ").filter { it.length > 3 }
+                val matchCount = currentWords.count { lower.contains(it) }
+                if (matchCount >= 2) {
+                    // OCR is seeing its own Indonesian translation! Reject!
+                    return
+                }
+            }
+
+            // Clean dialogue text
+            val cleanText = rawText.trim()
 
             if (cleanText.length >= 2) {
                 noTextCount = 0
+
+                // Only translate when recognized text actually changes
                 if (cleanText != lastRecognizedText) {
                     lastRecognizedText = cleanText
                     val translated = translator.translate(cleanText, sourceLang, targetLang)
+
+                    currentDisplayedTranslation = translated
                     withContext(Dispatchers.Main) {
-                        showSubtitle(cleanText, translated)
+                        showSubtitle(translated)
                     }
                 }
             } else {
                 noTextCount++
-                // Auto hide after ~1.5s of silence
+                // Auto hide subtitle after 3 silent checks (~1.6s)
                 if (noTextCount >= 3) {
                     withContext(Dispatchers.Main) {
                         subtitleView?.visibility = View.GONE
                         lastRecognizedText = ""
+                        currentDisplayedTranslation = ""
                     }
                 }
             }
