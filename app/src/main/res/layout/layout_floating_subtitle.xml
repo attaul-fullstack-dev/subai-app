@@ -1,30 +1,26 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/cardSubtitleBox"
     android:layout_width="match_parent"
-    android:layout_height="wrap_content"
-    android:orientation="vertical"
-    android:gravity="center"
+    android:layout_height="match_parent"
     android:background="@drawable/bg_floating_subtitle"
-    android:paddingHorizontal="12dp"
-    android:paddingVertical="6dp"
-    android:elevation="14dp">
+    android:padding="8dp">
 
-    <!-- Compact Cinematic Game Subtitle (Max 2 lines, yellow, high-contrast) -->
+    <!-- Direct In-Place Translation Text (Overlays & Covers Original English Text) -->
     <TextView
         android:id="@+id/tvTranslatedGameText"
-        android:layout_width="wrap_content"
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:textColor="#FFEB3B"
-        android:textSize="14sp"
-        android:textStyle="bold"
+        android:layout_gravity="center"
         android:gravity="center"
-        android:maxLines="2"
-        android:ellipsize="end"
+        android:textColor="#FFEB3B"
+        android:textSize="15sp"
+        android:textStyle="bold"
+        android:lineSpacingExtra="4dp"
         android:shadowColor="#000000"
         android:shadowDx="2"
         android:shadowDy="2"
-        android:shadowRadius="3"
+        android:shadowRadius="4"
         android:text="" />
 
-</LinearLayout>
+</FrameLayout>
