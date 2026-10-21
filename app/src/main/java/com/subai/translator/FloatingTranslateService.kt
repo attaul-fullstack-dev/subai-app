@@ -94,6 +94,7 @@ class FloatingTranslateService : Service() {
     private var targetLang = "id"
     private var isAutoRealtime = true
     private var autoScanJob: Job? = null
+    private var currentTranslateJob: Job? = null
     private var lastRecognizedFingerprint = ""
     private var noTextCount = 0
     private val activeItemsLock = Any()
@@ -288,6 +289,7 @@ class FloatingTranslateService : Service() {
         val quickMenu = bubbleView?.findViewById<View>(R.id.layoutQuickMenu)
         val btnMenuArea = bubbleView?.findViewById<Button>(R.id.btnMenuArea)
         val btnMenuScreenshot = bubbleView?.findViewById<Button>(R.id.btnMenuScreenshot)
+        val btnMenuPeek = bubbleView?.findViewById<Button>(R.id.btnMenuPeek)
         val btnMenuToggle = bubbleView?.findViewById<Button>(R.id.btnMenuToggleAuto)
         val btnMenuClose = bubbleView?.findViewById<View>(R.id.btnMenuClose)
 
@@ -334,6 +336,18 @@ class FloatingTranslateService : Service() {
         btnMenuScreenshot?.setOnClickListener {
             quickMenu?.visibility = View.GONE
             saveScreenshotToGallery()
+        }
+
+        btnMenuPeek?.setOnClickListener {
+            quickMenu?.visibility = View.GONE
+            inPlaceOverlayView?.visibility = View.GONE
+            serviceScope.launch {
+                delay(3500)
+                if (isAutoRealtime) {
+                    val count = synchronized(activeItemsLock) { activeItems.size }
+                    if (count > 0) inPlaceOverlayView?.visibility = View.VISIBLE
+                }
+            }
         }
 
         btnMenuToggle?.setOnClickListener {
@@ -517,9 +531,9 @@ class FloatingTranslateService : Service() {
             while (isActive && isAutoRealtime) {
                 try {
                     processCropAreaForSubtitle()
-                    delay(120) // Fast 120ms cycle: instant tracking for fast game subtitles
+                    delay(90) // Fast 90ms cycle: instant tracking for streamed & fast game subtitles
                 } catch (e: Exception) {
-                    delay(300)
+                    delay(250)
                 }
             }
         }
@@ -544,7 +558,9 @@ class FloatingTranslateService : Service() {
         }
         fullBitmap.recycle() // Free 10MB bitmap immediately to prevent GC stutter
 
-        val inputImage = InputImage.fromBitmap(croppedBitmap, 0)
+        // Boost blue/violet contrast so subtitles in The Walking Dead pop with 100% clarity
+        val enhancedBitmap = enhanceSubtitleBitmap(croppedBitmap)
+        val inputImage = InputImage.fromBitmap(enhancedBitmap, 0)
         try {
             val visionText = textRecognizer.process(inputImage).await()
             val detectedLines = ArrayList<Pair<String, Rect>>()
@@ -574,40 +590,48 @@ class FloatingTranslateService : Service() {
                 if (fingerprint != lastRecognizedFingerprint) {
                     lastRecognizedFingerprint = fingerprint
 
-                    // Translate all lines in parallel
-                    val translatedItems = coroutineScope {
-                        detectedLines.map { (text, box) ->
-                            async {
-                                val translated = translator.translateSingleLine(text, sourceLang, targetLang)
-                                TrackedItem(
-                                    originalText = text,
-                                    translatedText = translated,
-                                    left = box.left.toFloat(),
-                                    top = box.top.toFloat(),
-                                    right = box.right.toFloat(),
-                                    bottom = box.bottom.toFloat()
-                                )
+                    // Cancel any previous in-flight translation so we always process newest streamed words immediately
+                    currentTranslateJob?.cancel()
+                    currentTranslateJob = serviceScope.launch(Dispatchers.IO) {
+                        try {
+                            val translatedItems = detectedLines.map { (text, box) ->
+                                async {
+                                    val translated = translator.translateSingleLine(text, sourceLang, targetLang)
+                                    TrackedItem(
+                                        originalText = text,
+                                        translatedText = translated,
+                                        left = box.left.toFloat(),
+                                        top = box.top.toFloat(),
+                                        right = box.right.toFloat(),
+                                        bottom = box.bottom.toFloat()
+                                    )
+                                }
+                            }.awaitAll()
+
+                            synchronized(activeItemsLock) {
+                                activeItems.clear()
+                                activeItems.addAll(translatedItems)
                             }
-                        }.awaitAll()
-                    }
 
-                    synchronized(activeItemsLock) {
-                        activeItems.clear()
-                        activeItems.addAll(translatedItems)
-                    }
+                            val overlayItems = translatedItems.map { it.toTranslatedItem() }
 
-                    val overlayItems = translatedItems.map { it.toTranslatedItem() }
-
-                    withContext(Dispatchers.Main) {
-                        if (inPlaceOverlayView == null) setupSubtitleView()
-                        updateSubtitleBounds()
-                        inPlaceOverlayView?.setTranslatedItems(overlayItems)
-                        inPlaceOverlayView?.visibility = View.VISIBLE
+                            withContext(Dispatchers.Main) {
+                                if (inPlaceOverlayView == null) setupSubtitleView()
+                                updateSubtitleBounds()
+                                inPlaceOverlayView?.setTranslatedItems(overlayItems)
+                                inPlaceOverlayView?.visibility = View.VISIBLE
+                            }
+                        } catch (e: CancellationException) {
+                            // Cancelled by a newer stream frame
+                        } catch (e: Exception) {
+                            // Ignore translation anomalies
+                        }
                     }
                 }
             } else {
                 noTextCount++
                 if (noTextCount >= 3) {
+                    currentTranslateJob?.cancel()
                     withContext(Dispatchers.Main) {
                         inPlaceOverlayView?.clearItems()
                         inPlaceOverlayView?.visibility = View.GONE
@@ -622,7 +646,26 @@ class FloatingTranslateService : Service() {
             // Ignore OCR anomalies
         } finally {
             croppedBitmap.recycle()
+            enhancedBitmap.recycle()
         }
+    }
+
+    private fun enhanceSubtitleBitmap(src: Bitmap): Bitmap {
+        val enhanced = Bitmap.createBitmap(src.width, src.height, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(enhanced)
+        // High-contrast blue booster: Subtitles in The Walking Dead are light blue/violet.
+        // Standard grayscale loses blue contrast. This filter turns blue subtitles bright white!
+        val cm = ColorMatrix(floatArrayOf(
+            1.2f, 0f, 0.6f, 0f, 15f,
+            0f, 1.2f, 0.6f, 0f, 15f,
+            0.3f, 0.3f, 2.0f, 0f, 40f,
+            0f, 0f, 0f, 1f, 0f
+        ))
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            colorFilter = ColorMatrixColorFilter(cm)
+        }
+        canvas.drawBitmap(src, 0f, 0f, paint)
+        return enhanced
     }
 
     private fun captureLatestFrame(): Bitmap? {
@@ -786,6 +829,7 @@ class FloatingTranslateService : Service() {
         super.onDestroy()
         serviceScope.cancel()
         autoScanJob?.cancel()
+        currentTranslateJob?.cancel()
         synchronized(activeItemsLock) { activeItems.clear() }
         textRecognizer.close()
         translator.close()

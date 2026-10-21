@@ -58,6 +58,17 @@
             android:paddingHorizontal="8dp" />
 
         <Button
+            android:id="@+id/btnMenuPeek"
+            android:layout_width="wrap_content"
+            android:layout_height="36dp"
+            android:text="👁️ Intip"
+            android:textColor="#FFFFFF"
+            android:textSize="11sp"
+            android:backgroundTint="#673AB7"
+            android:layout_marginEnd="4dp"
+            android:paddingHorizontal="8dp" />
+
+        <Button
             android:id="@+id/btnMenuToggleAuto"
             android:layout_width="wrap_content"
             android:layout_height="36dp"

@@ -26,9 +26,11 @@ class InPlaceTranslationOverlayView @JvmOverloads constructor(
     private val items = ArrayList<TranslatedItem>()
     private val density = resources.displayMetrics.density
 
-    // Background pill to obscure / cover original English text
+    // Semi-transparent dark pill background (70% opacity):
+    // Obscures original English text while letting underlying game choice buttons,
+    // borders, and the countdown timer bar remain clearly visible to the player!
     private val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#E60A0D14") // 90% opaque dark background
+        color = Color.parseColor("#B30A0D14") // 70% opacity dark pill
         style = Paint.Style.FILL
     }
 
