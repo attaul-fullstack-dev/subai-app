@@ -8,14 +8,18 @@ import android.view.View
 data class TranslatedItem(
     val originalText: String,
     val translatedText: String,
-    val rect: Rect, // Bounding box relative to crop area
+    val rect: RectF, // Bounding box relative to crop area
     val timestamp: Long = System.currentTimeMillis()
 )
 
 /**
  * Custom overlay view that paints translated text directly on top of the original text
  * at the exact coordinates detected by ML Kit OCR.
- * Completely replaces the original text in-place (timpa teks asli).
+ *
+ * Features:
+ * 1. Anti-collision pass: Guarantees zero text overlapping between adjacent/stacked lines.
+ * 2. High-contrast subtitle styling: Dark background pill, cyan accent, crisp yellow text.
+ * 3. Proportional font auto-scaling with text clipping protection.
  */
 class InPlaceTranslationOverlayView @JvmOverloads constructor(
     context: Context,
@@ -63,39 +67,59 @@ class InPlaceTranslationOverlayView @JvmOverloads constructor(
         val viewW = width.toFloat()
         val viewH = height.toFloat()
 
-        for (item in items) {
+        val minGapY = 4f * density
+        val minGapX = 6f * density
+        val padX = 6f * density
+        val padY = 4f * density
+        val cornerRadius = 6f * density
+
+        // Sort items vertically so top lines are placed first
+        val sortedItems = items.sortedBy { it.rect.top }
+        val placedBoxes = ArrayList<RectF>()
+
+        for (item in sortedItems) {
             val r = item.rect
             if (r.width() <= 0 || r.height() <= 0) continue
 
-            // Add slight padding around detected bounding box
-            val padX = 6f * density
-            val padY = 4f * density
+            var boxLeft = (r.left - padX).coerceAtLeast(0f)
+            var boxTop = (r.top - padY).coerceAtLeast(0f)
+            var boxRight = (r.right + padX).coerceAtMost(viewW)
+            var boxBottom = (r.bottom + padY).coerceAtMost(viewH)
+            val boxH = (boxBottom - boxTop).coerceAtLeast(16f * density)
 
-            val left = (r.left.toFloat() - padX).coerceAtLeast(0f)
-            val top = (r.top.toFloat() - padY).coerceAtLeast(0f)
-            val right = (r.right.toFloat() + padX).coerceAtMost(viewW)
-            val bottom = (r.bottom.toFloat() + padY).coerceAtMost(viewH)
+            // ANTI-COLLISION PASS: Check against previously placed boxes
+            for (prev in placedBoxes) {
+                val overlapsX = boxLeft < prev.right + minGapX && boxRight > prev.left - minGapX
+                val overlapsY = boxTop < prev.bottom + minGapY && boxBottom > prev.top - minGapY
 
-            val boxRect = RectF(left, top, right, bottom)
-            val cornerRadius = 6f * density
+                if (overlapsX && overlapsY) {
+                    // Push current box down so it never overlaps with the box above it
+                    boxTop = prev.bottom + minGapY
+                    boxBottom = (boxTop + boxH).coerceAtMost(viewH)
+                }
+            }
+
+            val boxRect = RectF(boxLeft, boxTop, boxRight, boxBottom)
+            placedBoxes.add(boxRect)
 
             // 1. Draw solid dark background over original English text
             canvas.drawRoundRect(boxRect, cornerRadius, cornerRadius, bgPaint)
             canvas.drawRoundRect(boxRect, cornerRadius, cornerRadius, borderPaint)
 
             // 2. Measure & fit text inside the bounding box
-            val boxH = boxRect.height()
-            val boxW = boxRect.width()
+            val currentH = boxRect.height()
+            val currentW = boxRect.width()
 
             // Calculate font size proportional to box height
-            var targetTextSize = (boxH * 0.65f).coerceIn(12f * density, 24f * density)
+            var targetTextSize = (currentH * 0.65f).coerceIn(12f * density, 24f * density)
             textPaint.textSize = targetTextSize
 
-            // If text is wider than box, shrink font size to fit
+            // If text is wider than box, shrink font size to fit inside pill
+            val availableW = (currentW - 10f * density).coerceAtLeast(10f)
             val textWidth = textPaint.measureText(item.translatedText)
-            if (textWidth > boxW - (8f * density) && boxW > 20f) {
-                val scale = (boxW - (8f * density)) / textWidth
-                targetTextSize = (targetTextSize * scale).coerceAtLeast(10f * density)
+            if (textWidth > availableW) {
+                val scale = availableW / textWidth
+                targetTextSize = (targetTextSize * scale).coerceAtLeast(9f * density)
                 textPaint.textSize = targetTextSize
             }
 

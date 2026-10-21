@@ -10,6 +10,8 @@ import android.content.pm.ServiceInfo
 import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.PixelFormat
+import android.graphics.Rect
+import android.graphics.RectF
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
 import android.media.ImageReader
@@ -31,6 +33,25 @@ import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import kotlinx.coroutines.*
 import kotlinx.coroutines.tasks.await
+
+data class TrackedItem(
+    val originalText: String,
+    val translatedText: String,
+    var left: Float,
+    var top: Float,
+    var right: Float,
+    var bottom: Float,
+    var lastSeenTime: Long = System.currentTimeMillis()
+) {
+    fun toTranslatedItem(): TranslatedItem {
+        return TranslatedItem(
+            originalText = originalText,
+            translatedText = translatedText,
+            rect = RectF(left, top, right, bottom),
+            timestamp = lastSeenTime
+        )
+    }
+}
 
 class FloatingTranslateService : Service() {
 
@@ -72,9 +93,8 @@ class FloatingTranslateService : Service() {
     private var targetLang = "id"
     private var isAutoRealtime = true
     private var autoScanJob: Job? = null
-    private var lastRecognizedFingerprint = ""
-    private val activeTranslatedItems = ArrayList<TranslatedItem>()
-    private var noTextCount = 0
+    private val activeItemsLock = Any()
+    private val activeItems = ArrayList<TrackedItem>()
 
     companion object {
         const val CHANNEL_ID = "subai_overlay_channel"
@@ -388,7 +408,7 @@ class FloatingTranslateService : Service() {
 
         btnLock?.setOnClickListener {
             hideSelectionOverlay()
-            lastRecognizedFingerprint = ""
+            synchronized(activeItemsLock) { activeItems.clear() }
             updateSubtitleBounds()
             serviceScope.launch {
                 delay(300)
@@ -486,9 +506,9 @@ class FloatingTranslateService : Service() {
             while (isActive && isAutoRealtime) {
                 try {
                     processCropAreaForSubtitle()
-                    delay(450)
+                    delay(120) // Fast 120ms cycle: instant tracking for fast game subtitles
                 } catch (e: Exception) {
-                    delay(800)
+                    delay(300)
                 }
             }
         }
@@ -508,21 +528,16 @@ class FloatingTranslateService : Service() {
         val croppedBitmap = try {
             Bitmap.createBitmap(fullBitmap, safeX, safeY, safeW, safeH)
         } catch (e: Exception) {
+            fullBitmap.recycle()
             return
         }
+        fullBitmap.recycle() // Free 10MB bitmap immediately to prevent GC stutter
 
         val inputImage = InputImage.fromBitmap(croppedBitmap, 0)
         try {
             val visionText = textRecognizer.process(inputImage).await()
-            val detectedItems = ArrayList<TranslatedItem>()
             val now = System.currentTimeMillis()
-
-            val snapshotActive: List<TranslatedItem>
-            synchronized(activeTranslatedItems) {
-                // Expire items older than 3.8s so subtitles disappear when dialog ends
-                activeTranslatedItems.removeAll { now - it.timestamp > 3800 }
-                snapshotActive = ArrayList(activeTranslatedItems)
-            }
+            val detectedLines = ArrayList<Pair<String, Rect>>()
 
             for (block in visionText.textBlocks) {
                 for (line in block.lines) {
@@ -536,63 +551,86 @@ class FloatingTranslateService : Service() {
                             lineText.contains("Tarik Sudut", ignoreCase = true)) {
                             continue
                         }
-
-                        // Check if this detected text is our own active translation overlay!
-                        val existing = snapshotActive.find { item ->
-                            val textMatches = item.translatedText.equals(lineText, ignoreCase = true) ||
-                                    item.originalText.equals(lineText, ignoreCase = true)
-                            val centerDetectedX = box.centerX()
-                            val centerDetectedY = box.centerY()
-                            val boundsMatch = Math.abs(item.rect.centerX() - centerDetectedX) < 60 &&
-                                    Math.abs(item.rect.centerY() - centerDetectedY) < 40
-                            textMatches && boundsMatch
-                        }
-
-                        if (existing != null) {
-                            // Already translated! Keep the existing translation without re-translating!
-                            detectedItems.add(existing.copy(rect = box))
-                        } else {
-                            // Fresh new text from the game!
-                            val translated = translator.translateSingleLine(lineText, sourceLang, targetLang)
-                            detectedItems.add(TranslatedItem(lineText, translated, box, now))
-                        }
+                        detectedLines.add(lineText to box)
                     }
                 }
             }
 
-            if (detectedItems.isNotEmpty()) {
-                noTextCount = 0
-                synchronized(activeTranslatedItems) {
-                    activeTranslatedItems.clear()
-                    activeTranslatedItems.addAll(detectedItems)
-                }
+            val newLinesToTranslate = ArrayList<Pair<String, Rect>>()
 
-                val fingerprint = detectedItems.joinToString("|") { "${it.originalText}@${it.rect.left},${it.rect.top}" }
+            synchronized(activeItemsLock) {
+                for ((lineText, box) in detectedLines) {
+                    // Check if this detected line matches an already tracked item
+                    val existing = activeItems.find { item ->
+                        val textMatches = item.originalText.equals(lineText, ignoreCase = true) ||
+                                item.translatedText.equals(lineText, ignoreCase = true) ||
+                                (item.originalText.length > 4 && lineText.contains(item.originalText, ignoreCase = true))
+                        val centerX = (item.left + item.right) / 2f
+                        val centerY = (item.top + item.bottom) / 2f
+                        val dist = Math.hypot((centerX - box.centerX()).toDouble(), (centerY - box.centerY()).toDouble())
+                        textMatches && dist < (80f * resources.displayMetrics.density)
+                    }
 
-                if (fingerprint != lastRecognizedFingerprint) {
-                    lastRecognizedFingerprint = fingerprint
-                    withContext(Dispatchers.Main) {
-                        if (inPlaceOverlayView == null) setupSubtitleView()
-                        updateSubtitleBounds()
-                        inPlaceOverlayView?.setTranslatedItems(detectedItems)
-                        inPlaceOverlayView?.visibility = View.VISIBLE
+                    if (existing != null) {
+                        existing.lastSeenTime = now
+                        // Smooth lerp bounds to eliminate micro-jitter and flickering
+                        existing.left = existing.left * 0.65f + box.left * 0.35f
+                        existing.top = existing.top * 0.65f + box.top * 0.35f
+                        existing.right = existing.right * 0.65f + box.right * 0.35f
+                        existing.bottom = existing.bottom * 0.65f + box.bottom * 0.35f
+                    } else {
+                        newLinesToTranslate.add(lineText to box)
                     }
                 }
-            } else {
-                noTextCount++
-                if (noTextCount >= 3) {
-                    withContext(Dispatchers.Main) {
-                        inPlaceOverlayView?.clearItems()
-                        inPlaceOverlayView?.visibility = View.GONE
-                        lastRecognizedFingerprint = ""
-                        synchronized(activeTranslatedItems) {
-                            activeTranslatedItems.clear()
+
+                // Prune items not seen for > 900ms (grace period prevents flicker on dropped frames)
+                activeItems.removeAll { now - it.lastSeenTime > 900 }
+            }
+
+            // Translate all new lines IN PARALLEL for maximum speed (following fast dialogues)
+            if (newLinesToTranslate.isNotEmpty()) {
+                coroutineScope {
+                    val translatedList = newLinesToTranslate.map { (text, box) ->
+                        async {
+                            val translated = translator.translateSingleLine(text, sourceLang, targetLang)
+                            TrackedItem(
+                                originalText = text,
+                                translatedText = translated,
+                                left = box.left.toFloat(),
+                                top = box.top.toFloat(),
+                                right = box.right.toFloat(),
+                                bottom = box.bottom.toFloat(),
+                                lastSeenTime = now
+                            )
                         }
+                    }.awaitAll()
+
+                    synchronized(activeItemsLock) {
+                        activeItems.addAll(translatedList)
                     }
+                }
+            }
+
+            val currentItems: List<TranslatedItem>
+            synchronized(activeItemsLock) {
+                currentItems = activeItems.map { it.toTranslatedItem() }
+            }
+
+            withContext(Dispatchers.Main) {
+                if (currentItems.isNotEmpty()) {
+                    if (inPlaceOverlayView == null) setupSubtitleView()
+                    updateSubtitleBounds()
+                    inPlaceOverlayView?.setTranslatedItems(currentItems)
+                    inPlaceOverlayView?.visibility = View.VISIBLE
+                } else {
+                    inPlaceOverlayView?.clearItems()
+                    inPlaceOverlayView?.visibility = View.GONE
                 }
             }
         } catch (e: Exception) {
             // Ignore OCR anomalies
+        } finally {
+            croppedBitmap.recycle()
         }
     }
 
@@ -616,7 +654,13 @@ class FloatingTranslateService : Service() {
                 Bitmap.Config.ARGB_8888
             )
             bitmap.copyPixelsFromBuffer(buffer)
-            Bitmap.createBitmap(bitmap, 0, 0, screenWidth, screenHeight)
+            if (rowPadding == 0) {
+                bitmap
+            } else {
+                val clean = Bitmap.createBitmap(bitmap, 0, 0, screenWidth, screenHeight)
+                bitmap.recycle()
+                clean
+            }
         } catch (e: Exception) {
             null
         } finally {
@@ -648,6 +692,7 @@ class FloatingTranslateService : Service() {
         super.onDestroy()
         serviceScope.cancel()
         autoScanJob?.cancel()
+        synchronized(activeItemsLock) { activeItems.clear() }
         textRecognizer.close()
         translator.close()
 
