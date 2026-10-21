@@ -11,8 +11,8 @@ android {
         applicationId = "com.subai.translator"
         minSdk = 24
         targetSdk = 34
-        versionCode = 13
-        versionName = "2.1.0-stream-ocr-translucent-choice"
+        versionCode = 14
+        versionName = "2.2.0-speed-accuracy-streaming-fix"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

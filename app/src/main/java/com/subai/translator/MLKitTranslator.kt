@@ -15,8 +15,11 @@ class MLKitTranslator {
     private var currentTarget: String = ""
     private val mutex = Mutex()
 
-    // Fast in-memory cache to make game translation instant & flicker-free
-    private val translationCache = LinkedHashMap<String, String>(100, 0.75f, true)
+    // Fast in-memory LRU cache (up to 500 phrases) to make game translation instant (0ms) & flicker-free
+    private val translationCache = LinkedHashMap<String, String>(200, 0.75f, true)
+
+    private fun normalizeKey(s: String): String =
+        s.trim().replace(Regex("""[\s\p{Punct}]+"""), " ").lowercase()
 
     private suspend fun getOrCreateClient(source: String, target: String): Translator? {
         mutex.withLock {
@@ -45,21 +48,23 @@ class MLKitTranslator {
     suspend fun translateSingleLine(line: String, source: String, target: String): String {
         val trimmed = line.trim()
         if (trimmed.isEmpty()) return ""
+
+        val cacheKey = normalizeKey(trimmed)
         
-        // Check cache first
+        // Check cache first (0ms latency for repeating choices, menus, and phrases)
         synchronized(translationCache) {
-            translationCache[trimmed]?.let { return it }
+            translationCache[cacheKey]?.let { return it }
         }
 
         val client = getOrCreateClient(source, target) ?: return trimmed
         return try {
             val result = client.translate(trimmed).await().trim()
             synchronized(translationCache) {
-                if (translationCache.size > 200) {
+                if (translationCache.size > 500) {
                     val firstKey = translationCache.keys.firstOrNull()
                     if (firstKey != null) translationCache.remove(firstKey)
                 }
-                translationCache[trimmed] = result
+                translationCache[cacheKey] = result
             }
             result
         } catch (e: Exception) {

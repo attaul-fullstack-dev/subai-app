@@ -100,6 +100,11 @@ class FloatingTranslateService : Service() {
     private val activeItemsLock = Any()
     private val activeItems = ArrayList<TrackedItem>()
 
+    // Non-cancelling pipeline for streaming/typewriter subtitles (The Walking Dead)
+    private var isTranslating = false
+    private val translateLock = Any()
+    private var pendingBlocks: List<Pair<String, Rect>>? = null
+
     companion object {
         const val CHANNEL_ID = "subai_overlay_channel"
         const val EXTRA_RESULT_CODE = "extra_result_code"
@@ -531,7 +536,7 @@ class FloatingTranslateService : Service() {
             while (isActive && isAutoRealtime) {
                 try {
                     processCropAreaForSubtitle()
-                    delay(90) // Fast 90ms cycle: instant tracking for streamed & fast game subtitles
+                    delay(160) // Balanced 160ms cycle: instant tracking, no CPU throttling, smooth streaming
                 } catch (e: Exception) {
                     delay(250)
                 }
@@ -563,75 +568,62 @@ class FloatingTranslateService : Service() {
         val inputImage = InputImage.fromBitmap(enhancedBitmap, 0)
         try {
             val visionText = textRecognizer.process(inputImage).await()
-            val detectedLines = ArrayList<Pair<String, Rect>>()
+            val detectedBlocks = ArrayList<Pair<String, Rect>>()
 
+            // Group by coherent semantic TextBlock rather than fragmenting into individual lines/words
             for (block in visionText.textBlocks) {
-                for (line in block.lines) {
-                    val lineText = line.text.trim()
-                    val box = line.boundingBox
-                    if (lineText.length >= 2 && box != null) {
-                        // Skip system / UI text
-                        if (lineText.contains("SubAI", ignoreCase = true) ||
-                            lineText.contains("Kunci Area", ignoreCase = true) ||
-                            lineText.contains("Bawah Game", ignoreCase = true) ||
-                            lineText.contains("Tarik Sudut", ignoreCase = true)) {
-                            continue
-                        }
-                        detectedLines.add(lineText to box)
+                val blockText = block.text.replace("\n", " ").trim()
+                val box = block.boundingBox
+                if (blockText.length >= 2 && box != null) {
+                    // Skip system / UI text
+                    if (blockText.contains("SubAI", ignoreCase = true) ||
+                        blockText.contains("Kunci Area", ignoreCase = true) ||
+                        blockText.contains("Bawah Game", ignoreCase = true) ||
+                        blockText.contains("Tarik Sudut", ignoreCase = true)) {
+                        continue
                     }
+                    detectedBlocks.add(blockText to box)
                 }
             }
 
-            if (detectedLines.isNotEmpty()) {
+            if (detectedBlocks.isNotEmpty()) {
                 noTextCount = 0
-                val fingerprint = detectedLines.joinToString("|") { it.first }
 
-                // Only translate when text actually changes
-                if (fingerprint != lastRecognizedFingerprint) {
-                    lastRecognizedFingerprint = fingerprint
+                // Normalized fingerprint (strips punctuation and whitespace) like base.apk z.e()
+                // Prevents annoying flickering and jitter caused by subtle game lighting shifts
+                val fingerprint = detectedBlocks.joinToString("|") { (text, _) ->
+                    text.replace(Regex("""[\s\p{Punct}]+"""), "").lowercase()
+                }
 
-                    // Cancel any previous in-flight translation so we always process newest streamed words immediately
-                    currentTranslateJob?.cancel()
-                    currentTranslateJob = serviceScope.launch(Dispatchers.IO) {
-                        try {
-                            val translatedItems = detectedLines.map { (text, box) ->
-                                async {
-                                    val translated = translator.translateSingleLine(text, sourceLang, targetLang)
-                                    TrackedItem(
-                                        originalText = text,
-                                        translatedText = translated,
-                                        left = box.left.toFloat(),
-                                        top = box.top.toFloat(),
-                                        right = box.right.toFloat(),
-                                        bottom = box.bottom.toFloat()
-                                    )
-                                }
-                            }.awaitAll()
+                if (fingerprint == lastRecognizedFingerprint) {
+                    // Text is identical or minor punctuation change: keep existing translation steady!
+                    return
+                }
+                lastRecognizedFingerprint = fingerprint
 
-                            synchronized(activeItemsLock) {
-                                activeItems.clear()
-                                activeItems.addAll(translatedItems)
-                            }
-
-                            val overlayItems = translatedItems.map { it.toTranslatedItem() }
-
-                            withContext(Dispatchers.Main) {
-                                if (inPlaceOverlayView == null) setupSubtitleView()
-                                updateSubtitleBounds()
-                                inPlaceOverlayView?.setTranslatedItems(overlayItems)
-                                inPlaceOverlayView?.visibility = View.VISIBLE
-                            }
-                        } catch (e: CancellationException) {
-                            // Cancelled by a newer stream frame
-                        } catch (e: Exception) {
-                            // Ignore translation anomalies
-                        }
+                // Non-cancelling streaming pipeline:
+                // Never cancel an in-flight translation! As new words appear in The Walking Dead,
+                // the worker processes them smoothly in sequence so the player can actually read it!
+                synchronized(translateLock) {
+                    if (isTranslating) {
+                        pendingBlocks = detectedBlocks
+                        return
                     }
+                    isTranslating = true
+                }
+
+                serviceScope.launch(Dispatchers.IO) {
+                    executeTranslationPipeline(detectedBlocks)
                 }
             } else {
                 noTextCount++
-                if (noTextCount >= 3) {
-                    currentTranslateJob?.cancel()
+                // Generous persistence (~1 second of silence) before clearing overlay
+                // Gives players plenty of time to finish reading the last sentence comfortably!
+                if (noTextCount >= 6) {
+                    synchronized(translateLock) {
+                        isTranslating = false
+                        pendingBlocks = null
+                    }
                     withContext(Dispatchers.Main) {
                         inPlaceOverlayView?.clearItems()
                         inPlaceOverlayView?.visibility = View.GONE
@@ -647,6 +639,56 @@ class FloatingTranslateService : Service() {
         } finally {
             croppedBitmap.recycle()
             enhancedBitmap.recycle()
+        }
+    }
+
+    private suspend fun executeTranslationPipeline(initialBlocks: List<Pair<String, Rect>>) {
+        var currentBlocks = initialBlocks
+        while (true) {
+            try {
+                val translatedItems = currentBlocks.map { (text, box) ->
+                    val translated = translator.translateSingleLine(text, sourceLang, targetLang)
+                    TrackedItem(
+                        originalText = text,
+                        translatedText = translated,
+                        left = box.left.toFloat(),
+                        top = box.top.toFloat(),
+                        right = box.right.toFloat(),
+                        bottom = box.bottom.toFloat()
+                    )
+                }
+
+                synchronized(activeItemsLock) {
+                    activeItems.clear()
+                    activeItems.addAll(translatedItems)
+                }
+
+                val overlayItems = translatedItems.map { it.toTranslatedItem() }
+
+                withContext(Dispatchers.Main) {
+                    if (inPlaceOverlayView == null) setupSubtitleView()
+                    updateSubtitleBounds()
+                    inPlaceOverlayView?.setTranslatedItems(overlayItems)
+                    inPlaceOverlayView?.visibility = View.VISIBLE
+                }
+            } catch (e: Exception) {
+                // Translation error tolerance
+            }
+
+            val nextBlocks = synchronized(translateLock) {
+                val next = pendingBlocks
+                pendingBlocks = null
+                if (next == null) {
+                    isTranslating = false
+                }
+                next
+            }
+
+            if (nextBlocks != null) {
+                currentBlocks = nextBlocks
+            } else {
+                break
+            }
         }
     }
 
