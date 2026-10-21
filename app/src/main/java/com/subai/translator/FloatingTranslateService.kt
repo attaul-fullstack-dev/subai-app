@@ -4,28 +4,29 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.content.res.Configuration
-import android.graphics.Bitmap
-import android.graphics.PixelFormat
-import android.graphics.Rect
-import android.graphics.RectF
+import android.graphics.*
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
 import android.media.ImageReader
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.Build
+import android.os.Environment
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.provider.MediaStore
 import android.util.DisplayMetrics
 import android.util.Log
 import android.view.*
 import android.widget.Button
 import android.widget.FrameLayout
+import android.widget.Toast
 import androidx.appcompat.view.ContextThemeWrapper
 import androidx.core.app.NotificationCompat
 import com.google.mlkit.vision.common.InputImage
@@ -93,6 +94,8 @@ class FloatingTranslateService : Service() {
     private var targetLang = "id"
     private var isAutoRealtime = true
     private var autoScanJob: Job? = null
+    private var lastRecognizedFingerprint = ""
+    private var noTextCount = 0
     private val activeItemsLock = Any()
     private val activeItems = ArrayList<TrackedItem>()
 
@@ -284,6 +287,7 @@ class FloatingTranslateService : Service() {
         val cardBubble = bubbleView?.findViewById<View>(R.id.cardBubble)
         val quickMenu = bubbleView?.findViewById<View>(R.id.layoutQuickMenu)
         val btnMenuArea = bubbleView?.findViewById<Button>(R.id.btnMenuArea)
+        val btnMenuScreenshot = bubbleView?.findViewById<Button>(R.id.btnMenuScreenshot)
         val btnMenuToggle = bubbleView?.findViewById<Button>(R.id.btnMenuToggleAuto)
         val btnMenuClose = bubbleView?.findViewById<View>(R.id.btnMenuClose)
 
@@ -325,6 +329,11 @@ class FloatingTranslateService : Service() {
         btnMenuArea?.setOnClickListener {
             quickMenu?.visibility = View.GONE
             showSelectionOverlay()
+        }
+
+        btnMenuScreenshot?.setOnClickListener {
+            quickMenu?.visibility = View.GONE
+            saveScreenshotToGallery()
         }
 
         btnMenuToggle?.setOnClickListener {
@@ -463,11 +472,13 @@ class FloatingTranslateService : Service() {
         if (inPlaceOverlayView != null) return
         val themedContext = ContextThemeWrapper(this, R.style.Theme_SubAITranslator)
 
+        // FLAG_SECURE: Crucial! Isolates the overlay from MediaProjection screen capture,
+        // completely preventing OCR self-recursion, letter degradation, and position shifting.
         // FLAG_NOT_TOUCHABLE: Allows tapping buttons underneath in-game!
         // FLAG_NOT_FOCUSABLE: Never steals keyboard/focus!
-        // NOTE: FLAG_SECURE is intentionally NOT used so user can take screenshots of the game & translation anytime!
         val flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                WindowManager.LayoutParams.FLAG_SECURE
 
         subtitleParams = WindowManager.LayoutParams(
             cropWidth,
@@ -536,7 +547,6 @@ class FloatingTranslateService : Service() {
         val inputImage = InputImage.fromBitmap(croppedBitmap, 0)
         try {
             val visionText = textRecognizer.process(inputImage).await()
-            val now = System.currentTimeMillis()
             val detectedLines = ArrayList<Pair<String, Rect>>()
 
             for (block in visionText.textBlocks) {
@@ -556,75 +566,56 @@ class FloatingTranslateService : Service() {
                 }
             }
 
-            val newLinesToTranslate = ArrayList<Pair<String, Rect>>()
+            if (detectedLines.isNotEmpty()) {
+                noTextCount = 0
+                val fingerprint = detectedLines.joinToString("|") { it.first }
 
-            synchronized(activeItemsLock) {
-                for ((lineText, box) in detectedLines) {
-                    // Check if this detected line matches an already tracked item
-                    val existing = activeItems.find { item ->
-                        val textMatches = item.originalText.equals(lineText, ignoreCase = true) ||
-                                item.translatedText.equals(lineText, ignoreCase = true) ||
-                                (item.originalText.length > 4 && lineText.contains(item.originalText, ignoreCase = true))
-                        val centerX = (item.left + item.right) / 2f
-                        val centerY = (item.top + item.bottom) / 2f
-                        val dist = Math.hypot((centerX - box.centerX()).toDouble(), (centerY - box.centerY()).toDouble())
-                        textMatches && dist < (80f * resources.displayMetrics.density)
+                // Only translate when text actually changes
+                if (fingerprint != lastRecognizedFingerprint) {
+                    lastRecognizedFingerprint = fingerprint
+
+                    // Translate all lines in parallel
+                    val translatedItems = coroutineScope {
+                        detectedLines.map { (text, box) ->
+                            async {
+                                val translated = translator.translateSingleLine(text, sourceLang, targetLang)
+                                TrackedItem(
+                                    originalText = text,
+                                    translatedText = translated,
+                                    left = box.left.toFloat(),
+                                    top = box.top.toFloat(),
+                                    right = box.right.toFloat(),
+                                    bottom = box.bottom.toFloat()
+                                )
+                            }
+                        }.awaitAll()
                     }
-
-                    if (existing != null) {
-                        existing.lastSeenTime = now
-                        // Smooth lerp bounds to eliminate micro-jitter and flickering
-                        existing.left = existing.left * 0.65f + box.left * 0.35f
-                        existing.top = existing.top * 0.65f + box.top * 0.35f
-                        existing.right = existing.right * 0.65f + box.right * 0.35f
-                        existing.bottom = existing.bottom * 0.65f + box.bottom * 0.35f
-                    } else {
-                        newLinesToTranslate.add(lineText to box)
-                    }
-                }
-
-                // Prune items not seen for > 900ms (grace period prevents flicker on dropped frames)
-                activeItems.removeAll { now - it.lastSeenTime > 900 }
-            }
-
-            // Translate all new lines IN PARALLEL for maximum speed (following fast dialogues)
-            if (newLinesToTranslate.isNotEmpty()) {
-                coroutineScope {
-                    val translatedList = newLinesToTranslate.map { (text, box) ->
-                        async {
-                            val translated = translator.translateSingleLine(text, sourceLang, targetLang)
-                            TrackedItem(
-                                originalText = text,
-                                translatedText = translated,
-                                left = box.left.toFloat(),
-                                top = box.top.toFloat(),
-                                right = box.right.toFloat(),
-                                bottom = box.bottom.toFloat(),
-                                lastSeenTime = now
-                            )
-                        }
-                    }.awaitAll()
 
                     synchronized(activeItemsLock) {
-                        activeItems.addAll(translatedList)
+                        activeItems.clear()
+                        activeItems.addAll(translatedItems)
+                    }
+
+                    val overlayItems = translatedItems.map { it.toTranslatedItem() }
+
+                    withContext(Dispatchers.Main) {
+                        if (inPlaceOverlayView == null) setupSubtitleView()
+                        updateSubtitleBounds()
+                        inPlaceOverlayView?.setTranslatedItems(overlayItems)
+                        inPlaceOverlayView?.visibility = View.VISIBLE
                     }
                 }
-            }
-
-            val currentItems: List<TranslatedItem>
-            synchronized(activeItemsLock) {
-                currentItems = activeItems.map { it.toTranslatedItem() }
-            }
-
-            withContext(Dispatchers.Main) {
-                if (currentItems.isNotEmpty()) {
-                    if (inPlaceOverlayView == null) setupSubtitleView()
-                    updateSubtitleBounds()
-                    inPlaceOverlayView?.setTranslatedItems(currentItems)
-                    inPlaceOverlayView?.visibility = View.VISIBLE
-                } else {
-                    inPlaceOverlayView?.clearItems()
-                    inPlaceOverlayView?.visibility = View.GONE
+            } else {
+                noTextCount++
+                if (noTextCount >= 3) {
+                    withContext(Dispatchers.Main) {
+                        inPlaceOverlayView?.clearItems()
+                        inPlaceOverlayView?.visibility = View.GONE
+                        lastRecognizedFingerprint = ""
+                        synchronized(activeItemsLock) {
+                            activeItems.clear()
+                        }
+                    }
                 }
             }
         } catch (e: Exception) {
@@ -665,6 +656,109 @@ class FloatingTranslateService : Service() {
             null
         } finally {
             image.close()
+        }
+    }
+
+    private fun saveScreenshotToGallery() {
+        val fullBitmap = captureLatestFrame()
+        if (fullBitmap == null) {
+            Toast.makeText(this, "Gagal mengambil gambar layar", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        serviceScope.launch(Dispatchers.IO) {
+            try {
+                // Create a mutable copy to draw the translated subtitle overlay onto
+                val resultBitmap = fullBitmap.copy(Bitmap.Config.ARGB_8888, true)
+                fullBitmap.recycle()
+
+                val canvas = Canvas(resultBitmap)
+                val density = resources.displayMetrics.density
+
+                val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = Color.parseColor("#E60A0D14")
+                    style = Paint.Style.FILL
+                }
+                val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = Color.parseColor("#4D00E5FF")
+                    style = Paint.Style.STROKE
+                    strokeWidth = 1.2f * density
+                }
+                val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = Color.parseColor("#FFEB3B")
+                    typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+                    textAlign = Paint.Align.CENTER
+                    setShadowLayer(4f, 1f, 1f, Color.BLACK)
+                }
+
+                val currentItems = synchronized(activeItemsLock) {
+                    activeItems.map { it.toTranslatedItem() }
+                }
+
+                // Draw overlay items at (cropX + item.rect.left, cropY + item.rect.top)
+                for (item in currentItems) {
+                    val r = item.rect
+                    val left = cropX + r.left
+                    val top = cropY + r.top
+                    val right = cropX + r.right
+                    val bottom = cropY + r.bottom
+                    val boxRect = RectF(left, top, right, bottom)
+                    val cornerRadius = 4f * density
+
+                    canvas.drawRoundRect(boxRect, cornerRadius, cornerRadius, bgPaint)
+                    canvas.drawRoundRect(boxRect, cornerRadius, cornerRadius, borderPaint)
+
+                    val currentH = boxRect.height()
+                    val currentW = boxRect.width()
+                    var targetTextSize = (currentH * 0.70f).coerceIn(11f * density, 24f * density)
+                    textPaint.textSize = targetTextSize
+
+                    val availableW = (currentW - 6f * density).coerceAtLeast(10f)
+                    val textWidth = textPaint.measureText(item.translatedText)
+                    if (textWidth > availableW) {
+                        val scale = availableW / textWidth
+                        targetTextSize = (targetTextSize * scale).coerceAtLeast(9f * density)
+                        textPaint.textSize = targetTextSize
+                    }
+
+                    val fontMetrics = textPaint.fontMetrics
+                    val baseline = boxRect.centerY() - (fontMetrics.descent + fontMetrics.ascent) / 2f
+                    canvas.drawText(item.translatedText, boxRect.centerX(), baseline, textPaint)
+                }
+
+                // Save to MediaStore
+                val filename = "SubAI_Game_${System.currentTimeMillis()}.jpg"
+                val values = ContentValues().apply {
+                    put(MediaStore.Images.Media.DISPLAY_NAME, filename)
+                    put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/SubAI")
+                        put(MediaStore.Images.Media.IS_PENDING, 1)
+                    }
+                }
+
+                val uri = contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+                if (uri != null) {
+                    contentResolver.openOutputStream(uri)?.use { out ->
+                        resultBitmap.compress(Bitmap.CompressFormat.JPEG, 95, out)
+                    }
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        values.clear()
+                        values.put(MediaStore.Images.Media.IS_PENDING, 0)
+                        contentResolver.update(uri, values, null, null)
+                    }
+
+                    resultBitmap.recycle()
+
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(this@FloatingTranslateService, "📸 Screenshot disimpan ke Galeri (Pictures/SubAI)!", Toast.LENGTH_LONG).show()
+                    }
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(this@FloatingTranslateService, "Gagal menyimpan screenshot: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
+            }
         }
     }
 

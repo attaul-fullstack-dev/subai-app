@@ -47,6 +47,17 @@
             android:paddingHorizontal="10dp" />
 
         <Button
+            android:id="@+id/btnMenuScreenshot"
+            android:layout_width="wrap_content"
+            android:layout_height="36dp"
+            android:text="📸 Screenshot"
+            android:textColor="#FFFFFF"
+            android:textSize="11sp"
+            android:backgroundTint="#4CAF50"
+            android:layout_marginEnd="4dp"
+            android:paddingHorizontal="8dp" />
+
+        <Button
             android:id="@+id/btnMenuToggleAuto"
             android:layout_width="wrap_content"
             android:layout_height="36dp"
