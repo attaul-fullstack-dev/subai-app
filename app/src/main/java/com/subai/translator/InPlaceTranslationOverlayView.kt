@@ -8,7 +8,8 @@ import android.view.View
 data class TranslatedItem(
     val originalText: String,
     val translatedText: String,
-    val rect: Rect // Bounding box relative to crop area
+    val rect: Rect, // Bounding box relative to crop area
+    val timestamp: Long = System.currentTimeMillis()
 )
 
 /**

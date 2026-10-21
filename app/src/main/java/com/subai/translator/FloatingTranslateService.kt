@@ -73,6 +73,7 @@ class FloatingTranslateService : Service() {
     private var isAutoRealtime = true
     private var autoScanJob: Job? = null
     private var lastRecognizedFingerprint = ""
+    private val activeTranslatedItems = ArrayList<TranslatedItem>()
     private var noTextCount = 0
 
     companion object {
@@ -442,12 +443,11 @@ class FloatingTranslateService : Service() {
         if (inPlaceOverlayView != null) return
         val themedContext = ContextThemeWrapper(this, R.style.Theme_SubAITranslator)
 
-        // FLAG_SECURE: Excluded from VirtualDisplay screen capture (ZERO OCR feedback loop!)
         // FLAG_NOT_TOUCHABLE: Allows tapping buttons underneath in-game!
         // FLAG_NOT_FOCUSABLE: Never steals keyboard/focus!
+        // NOTE: FLAG_SECURE is intentionally NOT used so user can take screenshots of the game & translation anytime!
         val flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
-                WindowManager.LayoutParams.FLAG_SECURE
+                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
 
         subtitleParams = WindowManager.LayoutParams(
             cropWidth,
@@ -515,6 +515,14 @@ class FloatingTranslateService : Service() {
         try {
             val visionText = textRecognizer.process(inputImage).await()
             val detectedItems = ArrayList<TranslatedItem>()
+            val now = System.currentTimeMillis()
+
+            val snapshotActive: List<TranslatedItem>
+            synchronized(activeTranslatedItems) {
+                // Expire items older than 3.8s so subtitles disappear when dialog ends
+                activeTranslatedItems.removeAll { now - it.timestamp > 3800 }
+                snapshotActive = ArrayList(activeTranslatedItems)
+            }
 
             for (block in visionText.textBlocks) {
                 for (line in block.lines) {
@@ -528,14 +536,37 @@ class FloatingTranslateService : Service() {
                             lineText.contains("Tarik Sudut", ignoreCase = true)) {
                             continue
                         }
-                        val translated = translator.translateSingleLine(lineText, sourceLang, targetLang)
-                        detectedItems.add(TranslatedItem(lineText, translated, box))
+
+                        // Check if this detected text is our own active translation overlay!
+                        val existing = snapshotActive.find { item ->
+                            val textMatches = item.translatedText.equals(lineText, ignoreCase = true) ||
+                                    item.originalText.equals(lineText, ignoreCase = true)
+                            val centerDetectedX = box.centerX()
+                            val centerDetectedY = box.centerY()
+                            val boundsMatch = Math.abs(item.rect.centerX() - centerDetectedX) < 60 &&
+                                    Math.abs(item.rect.centerY() - centerDetectedY) < 40
+                            textMatches && boundsMatch
+                        }
+
+                        if (existing != null) {
+                            // Already translated! Keep the existing translation without re-translating!
+                            detectedItems.add(existing.copy(rect = box))
+                        } else {
+                            // Fresh new text from the game!
+                            val translated = translator.translateSingleLine(lineText, sourceLang, targetLang)
+                            detectedItems.add(TranslatedItem(lineText, translated, box, now))
+                        }
                     }
                 }
             }
 
             if (detectedItems.isNotEmpty()) {
                 noTextCount = 0
+                synchronized(activeTranslatedItems) {
+                    activeTranslatedItems.clear()
+                    activeTranslatedItems.addAll(detectedItems)
+                }
+
                 val fingerprint = detectedItems.joinToString("|") { "${it.originalText}@${it.rect.left},${it.rect.top}" }
 
                 if (fingerprint != lastRecognizedFingerprint) {
@@ -554,6 +585,9 @@ class FloatingTranslateService : Service() {
                         inPlaceOverlayView?.clearItems()
                         inPlaceOverlayView?.visibility = View.GONE
                         lastRecognizedFingerprint = ""
+                        synchronized(activeTranslatedItems) {
+                            activeTranslatedItems.clear()
+                        }
                     }
                 }
             }
