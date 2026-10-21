@@ -11,8 +11,8 @@ android {
         applicationId = "com.subai.translator"
         minSdk = 24
         targetSdk = 34
-        versionCode = 14
-        versionName = "2.2.0-speed-accuracy-streaming-fix"
+        versionCode = 15
+        versionName = "2.3.0-perfect-inplace-no-blackbox"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

@@ -358,11 +358,11 @@ class FloatingTranslateService : Service() {
         btnMenuToggle?.setOnClickListener {
             isAutoRealtime = !isAutoRealtime
             if (isAutoRealtime) {
-                btnMenuToggle.text = "▶️ Auto: ON"
+                btnMenuToggle.text = "Auto: ON"
                 btnMenuToggle.setBackgroundColor(0xFF00E5FF.toInt())
                 startRealtimeAutoScanner()
             } else {
-                btnMenuToggle.text = "⏸️ Jeda"
+                btnMenuToggle.text = "Jeda"
                 btnMenuToggle.setBackgroundColor(0xFFFF9800.toInt())
                 autoScanJob?.cancel()
                 inPlaceOverlayView?.clearItems()
@@ -491,13 +491,11 @@ class FloatingTranslateService : Service() {
         if (inPlaceOverlayView != null) return
         val themedContext = ContextThemeWrapper(this, R.style.Theme_SubAITranslator)
 
-        // FLAG_SECURE: Crucial! Isolates the overlay from MediaProjection screen capture,
-        // completely preventing OCR self-recursion, letter degradation, and position shifting.
+        // NO FLAG_SECURE: Prevents DRM blackouts, allows normal screenshots, and preserves full game graphics!
         // FLAG_NOT_TOUCHABLE: Allows tapping buttons underneath in-game!
         // FLAG_NOT_FOCUSABLE: Never steals keyboard/focus!
         val flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
-                WindowManager.LayoutParams.FLAG_SECURE
+                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
 
         subtitleParams = WindowManager.LayoutParams(
             cropWidth,
@@ -536,12 +534,56 @@ class FloatingTranslateService : Service() {
             while (isActive && isAutoRealtime) {
                 try {
                     processCropAreaForSubtitle()
-                    delay(160) // Balanced 160ms cycle: instant tracking, no CPU throttling, smooth streaming
+                    delay(160) // Balanced 160ms cycle: smooth streaming without CPU throttling
                 } catch (e: Exception) {
                     delay(250)
                 }
             }
         }
+    }
+
+    /**
+     * Extracts individual text lines with their exact bounding boxes.
+     * Prevents menu items (PLAY / EPISODES / HELP) or dialog choices from being
+     * squashed into a single nonsensical block.
+     * Also prevents OCR recursion by ignoring lines that match our current translations.
+     */
+    private fun extractDetectedLines(visionText: com.google.mlkit.vision.text.Text): List<Pair<String, Rect>> {
+        val result = ArrayList<Pair<String, Rect>>()
+        val currentTranslations = synchronized(activeItemsLock) {
+            activeItems.map { it.translatedText.trim().lowercase() }.toSet()
+        }
+
+        for (block in visionText.textBlocks) {
+            for (line in block.lines) {
+                val text = line.text.trim()
+                val box = line.boundingBox
+                if (text.length >= 2 && box != null) {
+                    val clean = text.lowercase()
+                    // 1. Skip system / UI text
+                    if (text.contains("SubAI", ignoreCase = true) ||
+                        text.contains("Kunci Area", ignoreCase = true) ||
+                        text.contains("Bawah Game", ignoreCase = true) ||
+                        text.contains("Tarik Sudut", ignoreCase = true) ||
+                        text.contains("Ubah Area", ignoreCase = true) ||
+                        text.contains("Screenshot", ignoreCase = true) ||
+                        text.contains("Intip", ignoreCase = true) ||
+                        text.contains("Auto:", ignoreCase = true) ||
+                        text.contains("Geser", ignoreCase = true)) {
+                        continue
+                    }
+
+                    // 2. Anti-recursion: Skip if this line is already our own translated text
+                    if (currentTranslations.contains(clean)) {
+                        continue
+                    }
+
+                    result.add(text to box)
+                }
+            }
+        }
+
+        return result
     }
 
     private suspend fun processCropAreaForSubtitle() {
@@ -561,49 +603,28 @@ class FloatingTranslateService : Service() {
             fullBitmap.recycle()
             return
         }
-        fullBitmap.recycle() // Free 10MB bitmap immediately to prevent GC stutter
+        fullBitmap.recycle()
 
-        // Boost blue/violet contrast so subtitles in The Walking Dead pop with 100% clarity
         val enhancedBitmap = enhanceSubtitleBitmap(croppedBitmap)
         val inputImage = InputImage.fromBitmap(enhancedBitmap, 0)
         try {
             val visionText = textRecognizer.process(inputImage).await()
-            val detectedBlocks = ArrayList<Pair<String, Rect>>()
-
-            // Group by coherent semantic TextBlock rather than fragmenting into individual lines/words
-            for (block in visionText.textBlocks) {
-                val blockText = block.text.replace("\n", " ").trim()
-                val box = block.boundingBox
-                if (blockText.length >= 2 && box != null) {
-                    // Skip system / UI text
-                    if (blockText.contains("SubAI", ignoreCase = true) ||
-                        blockText.contains("Kunci Area", ignoreCase = true) ||
-                        blockText.contains("Bawah Game", ignoreCase = true) ||
-                        blockText.contains("Tarik Sudut", ignoreCase = true)) {
-                        continue
-                    }
-                    detectedBlocks.add(blockText to box)
-                }
-            }
+            val detectedBlocks = extractDetectedLines(visionText)
 
             if (detectedBlocks.isNotEmpty()) {
                 noTextCount = 0
 
-                // Normalized fingerprint (strips punctuation and whitespace) like base.apk z.e()
-                // Prevents annoying flickering and jitter caused by subtle game lighting shifts
+                // Normalized fingerprint to prevent flickering from minor OCR jitter
                 val fingerprint = detectedBlocks.joinToString("|") { (text, _) ->
                     text.replace(Regex("""[\s\p{Punct}]+"""), "").lowercase()
                 }
 
                 if (fingerprint == lastRecognizedFingerprint) {
-                    // Text is identical or minor punctuation change: keep existing translation steady!
                     return
                 }
                 lastRecognizedFingerprint = fingerprint
 
-                // Non-cancelling streaming pipeline:
-                // Never cancel an in-flight translation! As new words appear in The Walking Dead,
-                // the worker processes them smoothly in sequence so the player can actually read it!
+                // Non-cancelling streaming pipeline
                 synchronized(translateLock) {
                     if (isTranslating) {
                         pendingBlocks = detectedBlocks
@@ -617,8 +638,6 @@ class FloatingTranslateService : Service() {
                 }
             } else {
                 noTextCount++
-                // Generous persistence (~1 second of silence) before clearing overlay
-                // Gives players plenty of time to finish reading the last sentence comfortably!
                 if (noTextCount >= 6) {
                     synchronized(translateLock) {
                         isTranslating = false
@@ -745,73 +764,17 @@ class FloatingTranslateService : Service() {
     }
 
     private fun saveScreenshotToGallery() {
-        val fullBitmap = captureLatestFrame()
-        if (fullBitmap == null) {
-            Toast.makeText(this, "Gagal mengambil gambar layar", Toast.LENGTH_SHORT).show()
-            return
-        }
-
         serviceScope.launch(Dispatchers.IO) {
+            delay(120) // Allow WindowManager to dismiss the quickMenu before capturing
+            val fullBitmap = captureLatestFrame()
+            if (fullBitmap == null) {
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(this@FloatingTranslateService, "Gagal mengambil gambar layar", Toast.LENGTH_SHORT).show()
+                }
+                return@launch
+            }
+
             try {
-                // Create a mutable copy to draw the translated subtitle overlay onto
-                val resultBitmap = fullBitmap.copy(Bitmap.Config.ARGB_8888, true)
-                fullBitmap.recycle()
-
-                val canvas = Canvas(resultBitmap)
-                val density = resources.displayMetrics.density
-
-                val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                    color = Color.parseColor("#E60A0D14")
-                    style = Paint.Style.FILL
-                }
-                val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                    color = Color.parseColor("#4D00E5FF")
-                    style = Paint.Style.STROKE
-                    strokeWidth = 1.2f * density
-                }
-                val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                    color = Color.parseColor("#FFEB3B")
-                    typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-                    textAlign = Paint.Align.CENTER
-                    setShadowLayer(4f, 1f, 1f, Color.BLACK)
-                }
-
-                val currentItems = synchronized(activeItemsLock) {
-                    activeItems.map { it.toTranslatedItem() }
-                }
-
-                // Draw overlay items at (cropX + item.rect.left, cropY + item.rect.top)
-                for (item in currentItems) {
-                    val r = item.rect
-                    val left = cropX + r.left
-                    val top = cropY + r.top
-                    val right = cropX + r.right
-                    val bottom = cropY + r.bottom
-                    val boxRect = RectF(left, top, right, bottom)
-                    val cornerRadius = 4f * density
-
-                    canvas.drawRoundRect(boxRect, cornerRadius, cornerRadius, bgPaint)
-                    canvas.drawRoundRect(boxRect, cornerRadius, cornerRadius, borderPaint)
-
-                    val currentH = boxRect.height()
-                    val currentW = boxRect.width()
-                    var targetTextSize = (currentH * 0.70f).coerceIn(11f * density, 24f * density)
-                    textPaint.textSize = targetTextSize
-
-                    val availableW = (currentW - 6f * density).coerceAtLeast(10f)
-                    val textWidth = textPaint.measureText(item.translatedText)
-                    if (textWidth > availableW) {
-                        val scale = availableW / textWidth
-                        targetTextSize = (targetTextSize * scale).coerceAtLeast(9f * density)
-                        textPaint.textSize = targetTextSize
-                    }
-
-                    val fontMetrics = textPaint.fontMetrics
-                    val baseline = boxRect.centerY() - (fontMetrics.descent + fontMetrics.ascent) / 2f
-                    canvas.drawText(item.translatedText, boxRect.centerX(), baseline, textPaint)
-                }
-
-                // Save to MediaStore
                 val filename = "SubAI_Game_${System.currentTimeMillis()}.jpg"
                 val values = ContentValues().apply {
                     put(MediaStore.Images.Media.DISPLAY_NAME, filename)
@@ -825,7 +788,7 @@ class FloatingTranslateService : Service() {
                 val uri = contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
                 if (uri != null) {
                     contentResolver.openOutputStream(uri)?.use { out ->
-                        resultBitmap.compress(Bitmap.CompressFormat.JPEG, 95, out)
+                        fullBitmap.compress(Bitmap.CompressFormat.JPEG, 95, out)
                     }
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                         values.clear()
@@ -833,7 +796,7 @@ class FloatingTranslateService : Service() {
                         contentResolver.update(uri, values, null, null)
                     }
 
-                    resultBitmap.recycle()
+                    fullBitmap.recycle()
 
                     withContext(Dispatchers.Main) {
                         Toast.makeText(this@FloatingTranslateService, "📸 Screenshot disimpan ke Galeri (Pictures/SubAI)!", Toast.LENGTH_LONG).show()

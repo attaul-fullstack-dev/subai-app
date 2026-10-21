@@ -39,55 +39,65 @@
             android:id="@+id/btnMenuArea"
             android:layout_width="wrap_content"
             android:layout_height="36dp"
-            android:text="📐 Ubah Area"
+            android:text="Ubah Area"
+            android:textAllCaps="false"
             android:textColor="#FFFFFF"
-            android:textSize="11sp"
+            android:textSize="10sp"
             android:backgroundTint="#333333"
-            android:layout_marginEnd="4dp"
-            android:paddingHorizontal="10dp" />
+            android:layout_marginEnd="3dp"
+            android:minWidth="0dp"
+            android:paddingHorizontal="6dp" />
 
         <Button
             android:id="@+id/btnMenuScreenshot"
             android:layout_width="wrap_content"
             android:layout_height="36dp"
-            android:text="📸 Screenshot"
+            android:text="Screenshot"
+            android:textAllCaps="false"
             android:textColor="#FFFFFF"
-            android:textSize="11sp"
+            android:textSize="10sp"
             android:backgroundTint="#4CAF50"
-            android:layout_marginEnd="4dp"
-            android:paddingHorizontal="8dp" />
+            android:layout_marginEnd="3dp"
+            android:minWidth="0dp"
+            android:paddingHorizontal="6dp" />
 
         <Button
             android:id="@+id/btnMenuPeek"
             android:layout_width="wrap_content"
             android:layout_height="36dp"
-            android:text="👁️ Intip"
+            android:text="Intip"
+            android:textAllCaps="false"
             android:textColor="#FFFFFF"
-            android:textSize="11sp"
+            android:textSize="10sp"
             android:backgroundTint="#673AB7"
-            android:layout_marginEnd="4dp"
-            android:paddingHorizontal="8dp" />
+            android:layout_marginEnd="3dp"
+            android:minWidth="0dp"
+            android:paddingHorizontal="6dp" />
 
         <Button
             android:id="@+id/btnMenuToggleAuto"
             android:layout_width="wrap_content"
             android:layout_height="36dp"
-            android:text="▶️ Auto: ON"
+            android:text="Auto: ON"
+            android:textAllCaps="false"
             android:textColor="#000000"
-            android:textSize="11sp"
+            android:textSize="10sp"
             android:textStyle="bold"
             android:backgroundTint="#00E5FF"
-            android:layout_marginEnd="4dp"
-            android:paddingHorizontal="8dp" />
+            android:layout_marginEnd="3dp"
+            android:minWidth="0dp"
+            android:paddingHorizontal="6dp" />
 
         <Button
             android:id="@+id/btnMenuClose"
             android:layout_width="36dp"
             android:layout_height="36dp"
             android:text="✕"
+            android:textAllCaps="false"
             android:textColor="#FFFFFF"
             android:textSize="12sp"
             android:backgroundTint="#D32F2F"
+            android:minWidth="0dp"
             android:padding="0dp" />
     </LinearLayout>
 
