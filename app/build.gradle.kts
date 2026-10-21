@@ -11,8 +11,8 @@ android {
         applicationId = "com.subai.translator"
         minSdk = 24
         targetSdk = 34
-        versionCode = 8
-        versionName = "1.6.0-inplace-translate"
+        versionCode = 9
+        versionName = "1.7.0-inplace-exact"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

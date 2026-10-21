@@ -24,7 +24,6 @@ import android.util.Log
 import android.view.*
 import android.widget.Button
 import android.widget.FrameLayout
-import android.widget.TextView
 import androidx.appcompat.view.ContextThemeWrapper
 import androidx.core.app.NotificationCompat
 import com.google.mlkit.vision.common.InputImage
@@ -40,7 +39,7 @@ class FloatingTranslateService : Service() {
     // Overlays
     private var bubbleView: View? = null
     private var selectionOverlayView: View? = null
-    private var subtitleView: View? = null
+    private var inPlaceOverlayView: InPlaceTranslationOverlayView? = null
 
     // LayoutParams
     private lateinit var bubbleParams: WindowManager.LayoutParams
@@ -73,8 +72,7 @@ class FloatingTranslateService : Service() {
     private var targetLang = "id"
     private var isAutoRealtime = true
     private var autoScanJob: Job? = null
-    private var lastRecognizedText = ""
-    private var currentDisplayedTranslation = ""
+    private var lastRecognizedFingerprint = ""
     private var noTextCount = 0
 
     companion object {
@@ -244,7 +242,7 @@ class FloatingTranslateService : Service() {
     }
 
     // =========================================================================
-    // 1. FLOATING BUBBLE (Control Button)
+    // 1. FLOATING BUBBLE
     // =========================================================================
     private fun setupFloatingBubble() {
         val themedContext = ContextThemeWrapper(this, R.style.Theme_SubAITranslator)
@@ -318,7 +316,8 @@ class FloatingTranslateService : Service() {
                 btnMenuToggle.text = "⏸️ Jeda"
                 btnMenuToggle.setBackgroundColor(0xFFFF9800.toInt())
                 autoScanJob?.cancel()
-                subtitleView?.visibility = View.GONE
+                inPlaceOverlayView?.clearItems()
+                inPlaceOverlayView?.visibility = View.GONE
             }
         }
 
@@ -336,7 +335,8 @@ class FloatingTranslateService : Service() {
         if (selectionOverlayView != null) return
 
         autoScanJob?.cancel()
-        subtitleView?.visibility = View.GONE
+        inPlaceOverlayView?.clearItems()
+        inPlaceOverlayView?.visibility = View.GONE
 
         val themedContext = ContextThemeWrapper(this, R.style.Theme_SubAITranslator)
         selectionOverlayView = LayoutInflater.from(themedContext).inflate(R.layout.layout_crop_selection, null)
@@ -387,8 +387,7 @@ class FloatingTranslateService : Service() {
 
         btnLock?.setOnClickListener {
             hideSelectionOverlay()
-            lastRecognizedText = ""
-            currentDisplayedTranslation = ""
+            lastRecognizedFingerprint = ""
             updateSubtitleBounds()
             serviceScope.launch {
                 delay(300)
@@ -437,15 +436,15 @@ class FloatingTranslateService : Service() {
     }
 
     // =========================================================================
-    // 3. IN-PLACE TRANSLATION OVERLAY (Replaces / Overlays Original Text Directly)
+    // 3. IN-PLACE TRANSLATION OVERLAY (Exact Text Replacement)
     // =========================================================================
     private fun setupSubtitleView() {
-        if (subtitleView != null) return
+        if (inPlaceOverlayView != null) return
         val themedContext = ContextThemeWrapper(this, R.style.Theme_SubAITranslator)
 
-        // FLAG_SECURE: Prevents VirtualDisplay from capturing the overlay (ZERO OCR feedback loop!)
-        // FLAG_NOT_TOUCHABLE: Allows user to click game buttons underneath the translation directly!
-        // FLAG_NOT_FOCUSABLE: Never steals keyboard or window focus from the game!
+        // FLAG_SECURE: Excluded from VirtualDisplay screen capture (ZERO OCR feedback loop!)
+        // FLAG_NOT_TOUCHABLE: Allows tapping buttons underneath in-game!
+        // FLAG_NOT_FOCUSABLE: Never steals keyboard/focus!
         val flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
                 WindowManager.LayoutParams.FLAG_SECURE
@@ -462,32 +461,24 @@ class FloatingTranslateService : Service() {
             y = cropY
         }
 
-        subtitleView = LayoutInflater.from(themedContext).inflate(R.layout.layout_floating_subtitle, null)
-        subtitleView?.visibility = View.GONE
-        windowManager.addView(subtitleView, subtitleParams)
+        inPlaceOverlayView = InPlaceTranslationOverlayView(themedContext)
+        inPlaceOverlayView?.visibility = View.GONE
+        windowManager.addView(inPlaceOverlayView, subtitleParams)
     }
 
     private fun updateSubtitleBounds() {
-        if (subtitleView == null || !::subtitleParams.isInitialized) return
+        if (inPlaceOverlayView == null || !::subtitleParams.isInitialized) return
         subtitleParams.x = cropX
         subtitleParams.y = cropY
         subtitleParams.width = cropWidth
         subtitleParams.height = cropHeight
         try {
-            windowManager.updateViewLayout(subtitleView, subtitleParams)
+            windowManager.updateViewLayout(inPlaceOverlayView, subtitleParams)
         } catch (e: Exception) {}
     }
 
-    private fun showSubtitle(translated: String) {
-        if (subtitleView == null) setupSubtitleView()
-        updateSubtitleBounds()
-
-        subtitleView?.findViewById<TextView>(R.id.tvTranslatedGameText)?.text = translated
-        subtitleView?.visibility = View.VISIBLE
-    }
-
     // =========================================================================
-    // 4. ACCURATE REAL-TIME SCANNER & IN-PLACE TRANSLATOR
+    // 4. ACCURATE REAL-TIME SCANNER & IN-PLACE TEXT REPLACER
     // =========================================================================
     private fun startRealtimeAutoScanner() {
         autoScanJob?.cancel()
@@ -495,7 +486,7 @@ class FloatingTranslateService : Service() {
             while (isActive && isAutoRealtime) {
                 try {
                     processCropAreaForSubtitle()
-                    delay(500)
+                    delay(450)
                 } catch (e: Exception) {
                     delay(800)
                 }
@@ -523,48 +514,51 @@ class FloatingTranslateService : Service() {
         val inputImage = InputImage.fromBitmap(croppedBitmap, 0)
         try {
             val visionText = textRecognizer.process(inputImage).await()
+            val detectedItems = ArrayList<TranslatedItem>()
 
-            // Extract distinct lines preserving menu items & dialogue choices
-            val validLines = visionText.text.lines()
-                .map { it.trim() }
-                .filter { line ->
-                    line.length >= 2 &&
-                            !line.contains("SubAI", ignoreCase = true) &&
-                            !line.contains("Kunci Area", ignoreCase = true) &&
-                            !line.contains("Bawah Game", ignoreCase = true) &&
-                            !line.contains("Tarik Sudut", ignoreCase = true)
+            for (block in visionText.textBlocks) {
+                for (line in block.lines) {
+                    val lineText = line.text.trim()
+                    val box = line.boundingBox
+                    if (lineText.length >= 2 && box != null) {
+                        // Skip system / UI text
+                        if (lineText.contains("SubAI", ignoreCase = true) ||
+                            lineText.contains("Kunci Area", ignoreCase = true) ||
+                            lineText.contains("Bawah Game", ignoreCase = true) ||
+                            lineText.contains("Tarik Sudut", ignoreCase = true)) {
+                            continue
+                        }
+                        val translated = translator.translateSingleLine(lineText, sourceLang, targetLang)
+                        detectedItems.add(TranslatedItem(lineText, translated, box))
+                    }
                 }
+            }
 
-            val cleanText = validLines.joinToString("\n")
-
-            if (cleanText.isNotEmpty()) {
+            if (detectedItems.isNotEmpty()) {
                 noTextCount = 0
+                val fingerprint = detectedItems.joinToString("|") { "${it.originalText}@${it.rect.left},${it.rect.top}" }
 
-                // Only translate when the text actually changes
-                if (cleanText != lastRecognizedText) {
-                    lastRecognizedText = cleanText
-
-                    // Accurate line-by-line translation (preserves PLAY, EPISODES, HELP & OPTIONS structure)
-                    val translated = translator.translateAccurate(cleanText, sourceLang, targetLang)
-
-                    currentDisplayedTranslation = translated
+                if (fingerprint != lastRecognizedFingerprint) {
+                    lastRecognizedFingerprint = fingerprint
                     withContext(Dispatchers.Main) {
-                        showSubtitle(translated)
+                        if (inPlaceOverlayView == null) setupSubtitleView()
+                        updateSubtitleBounds()
+                        inPlaceOverlayView?.setTranslatedItems(detectedItems)
+                        inPlaceOverlayView?.visibility = View.VISIBLE
                     }
                 }
             } else {
                 noTextCount++
-                // Automatically hide when no text is present on screen (after ~1.5s)
                 if (noTextCount >= 3) {
                     withContext(Dispatchers.Main) {
-                        subtitleView?.visibility = View.GONE
-                        lastRecognizedText = ""
-                        currentDisplayedTranslation = ""
+                        inPlaceOverlayView?.clearItems()
+                        inPlaceOverlayView?.visibility = View.GONE
+                        lastRecognizedFingerprint = ""
                     }
                 }
             }
         } catch (e: Exception) {
-            // Ignore temporary OCR errors
+            // Ignore OCR anomalies
         }
     }
 
@@ -630,7 +624,7 @@ class FloatingTranslateService : Service() {
 
         bubbleView?.let { try { windowManager.removeView(it) } catch (e: Exception) {} }
         hideSelectionOverlay()
-        subtitleView?.let { try { windowManager.removeView(it) } catch (e: Exception) {} }
+        inPlaceOverlayView?.let { try { windowManager.removeView(it) } catch (e: Exception) {} }
 
         virtualDisplay?.release()
         imageReader?.close()
